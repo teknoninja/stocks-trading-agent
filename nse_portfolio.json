@@ -1,10 +1,23 @@
 {
   "currency": "INR",
   "starting_cash": 20000.0,
-  "cash": 20000.0,
-  "positions": {},
-  "trades": [],
+  "cash": 18903.5,
+  "positions": {
+    "INFY.NS": {
+      "qty": 1,
+      "avg_price": 1096.5
+    }
+  },
+  "trades": [
+    {
+      "ts": "2026-07-18T14:25:05.009052+00:00",
+      "symbol": "INFY.NS",
+      "side": "buy",
+      "qty": 1,
+      "price": 1096.5
+    }
+  ],
   "equity_history": [],
   "created_at": "2026-07-18T14:24:38.308209+00:00",
-  "updated_at": "2026-07-18T14:24:38.308209+00:00"
+  "updated_at": "2026-07-18T14:25:05.009052+00:00"
 }
