@@ -69,6 +69,10 @@
       </div>
       <div id="tvb-conf" style="margin-top:6px;color:#9ca3af;font-size:11px">Browse the list and open any stock — I'll follow it and generate a flag.</div>
       <div id="tvb-reasons" style="margin-top:8px;font-size:11.5px;line-height:1.45;max-height:150px;overflow-y:auto"></div>
+      <div style="margin-top:10px;display:flex;gap:6px">
+        <button id="tvb-trade" style="flex:1;background:#1b1f2a;border:1px solid #2d3342;color:#e5e7eb;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px">📄 Paper trade</button>
+        <button id="tvb-auto" style="flex:1;background:#1b1f2a;border:1px solid #2d3342;color:#9ca3af;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px">⏻ Auto: …</button>
+      </div>
     </div>
     <div id="tvb-chat" style="flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px"></div>
     <div style="padding:10px 12px;border-top:1px solid #262a35;display:flex;gap:6px">
@@ -159,6 +163,49 @@
   api("/health").then((h) => {
     $("tvb-llm").textContent = h.llm ? `LLM: ${h.model}` : "LLM: off (rule-based)";
   }).catch(() => { $("tvb-llm").textContent = "server off"; });
+
+  // ---------- paper trading ----------
+  $("tvb-trade").onclick = async () => {
+    if (!currentSymbol) return;
+    const pending = addMsg(`submitting paper trade for ${currentSymbol}…`, "bot");
+    try {
+      const d = await api("/papertrade", { symbol: currentSymbol });
+      pending.textContent = d.ok ? `✅ ${d.action} (paper account)` : `⚠️ ${d.error}`;
+    } catch (e) { pending.textContent = "Server unreachable."; }
+  };
+
+  // ---------- after-hours auto-trading toggle ----------
+  let autoState = null; // null=unknown/unconfigured, true/false=state
+  function paintAuto() {
+    const b = $("tvb-auto");
+    if (autoState === null) {
+      b.textContent = "⏻ Auto: n/a";
+      b.style.color = "#6b7280";
+    } else if (autoState) {
+      b.textContent = "⏻ Auto: ON";
+      b.style.color = "#4ade80"; b.style.borderColor = "#16a34a";
+    } else {
+      b.textContent = "⏻ Auto: OFF";
+      b.style.color = "#9ca3af"; b.style.borderColor = "#2d3342";
+    }
+  }
+  api("/autotrade").then((s) => { autoState = s.configured ? s.enabled : null; paintAuto(); })
+    .catch(() => paintAuto());
+  $("tvb-auto").onclick = async () => {
+    if (autoState === null) {
+      addMsg("Auto-trading toggle isn't configured on the server (needs GITHUB_TOKEN + GITHUB_REPO). You can also flip the AUTO_TRADING variable on github.com → repo Settings → Actions variables.", "bot");
+      return;
+    }
+    try {
+      const d = await api("/autotrade", { on: !autoState });
+      if (d.ok) {
+        autoState = d.enabled; paintAuto();
+        addMsg(autoState
+          ? "🟢 Auto-trading ON — the GitHub scanner will trade your watchlist during US market hours, even with this laptop off."
+          : "⚪ Auto-trading OFF — no scheduled trades will run.", "bot");
+      } else { addMsg(`⚠️ ${d.error}`, "bot"); }
+    } catch (e) { addMsg("Server unreachable.", "bot"); }
+  };
 
   // watch for symbol changes as user navigates TradingView (SPA)
   setInterval(() => {

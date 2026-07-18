@@ -6,6 +6,23 @@
 # Get one free at https://aistudio.google.com/apikey
 export GEMINI_API_KEY='your-gemini-api-key-here'
 
+# Alpaca PAPER trading keys (free — https://alpaca.markets, Paper dashboard)
+# Used by the "Paper trade" sidebar button and the watchlist scanner.
+export ALPACA_API_KEY='your-alpaca-paper-key'
+export ALPACA_SECRET_KEY='your-alpaca-paper-secret'
+
+# GitHub token + repo for the sidebar "Auto trading" toggle (optional —
+# you can also flip the AUTO_TRADING variable on github.com by hand).
+# Fine-grained token, single repo, permission: Actions variables read/write.
+export GITHUB_TOKEN='your-github-token'
+export GITHUB_REPO='yourname/stocks-trading-agent'
+
+# Scanner tuning (defaults shown)
+# export TV_BOT_NOTIONAL='1000'   # $ per position
+# export TV_BOT_MIN_CONF='0.55'   # min flag confidence to buy
+# export TV_BOT_MAX_POS='10'      # max open positions
+# export TV_BOT_MAX_DD='0.03'     # daily drawdown circuit breaker (3%)
+
 # OpenAI API Key
 export OPENAI_API_KEY='your-openai-api-key-here'
 

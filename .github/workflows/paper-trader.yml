@@ -1,0 +1,48 @@
+# After-hours paper trading — runs on GitHub's servers so your laptop can be off.
+#
+# THE SWITCH: the repo variable AUTO_TRADING.
+#   - "on"  -> scheduled scans run and may trade (paper account only)
+#   - anything else / missing -> the job is skipped (0 billable minutes)
+# Flip it from the sidebar's Auto-trading toggle, or manually:
+#   repo Settings -> Secrets and variables -> Actions -> Variables -> AUTO_TRADING
+#
+# Required repo SECRETS (Settings -> Secrets and variables -> Actions -> Secrets):
+#   ALPACA_API_KEY, ALPACA_SECRET_KEY   (PAPER keys)
+name: Paper Trader
+
+on:
+  schedule:
+    # Every 30 min during US market hours (13:30-20:00 UTC), Mon-Fri.
+    - cron: "*/30 13-20 * * 1-5"
+  workflow_dispatch: {}   # manual "Run workflow" button for testing
+
+permissions:
+  actions: write          # lets the drawdown breaker flip AUTO_TRADING off
+
+concurrency:
+  group: paper-trader
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # THE GATE — job is skipped unless the variable is exactly "on"
+    if: ${{ vars.AUTO_TRADING == 'on' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-scanner.txt
+
+      - name: Run watchlist scan
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python run_scanner.py

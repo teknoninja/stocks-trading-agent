@@ -45,6 +45,19 @@ The sidebar is also packaged as a Chrome extension in [chrome_extension/](chrome
 
 Then just keep the analysis server running (`python run_tradingview_bot.py --no-browser`) and browse tradingview.com normally — the sidebar appears on every chart/symbol page. API calls route through the extension's background service worker, so no CSP or local-network workarounds are needed.
 
+### 📄 Alpaca paper trading + after-hours automation
+
+Free Alpaca **paper** account (fake money) integration, two ways to use it:
+
+- **Manual:** the sidebar's **📄 Paper trade** button trades the current flag (BUY → buy `$TV_BOT_NOTIONAL`, SELL → close the position).
+- **Automated:** `.github/workflows/paper-trader.yml` runs `run_scanner.py` on GitHub's servers every 30 min during US market hours — your laptop can be off. The scanner reconciles [watchlist.txt](watchlist.txt) flags with current Alpaca positions (long-only, stateless; Alpaca is the source of truth).
+
+**The ON/OFF switch** is the repo variable `AUTO_TRADING`: the scheduled job runs only when it equals `on` (skipped = zero Actions minutes). Flip it with the sidebar's **⏻ Auto** toggle (needs `GITHUB_TOKEN`+`GITHUB_REPO` in `.envrc`) or on github.com → Settings → Secrets and variables → Actions → Variables. The manual "Run workflow" button bypasses the gate for testing.
+
+**Guardrails:** market-clock check, confidence ≥ 0.55 to buy, max 10 positions, and a daily drawdown circuit breaker (equity −3% vs yesterday → flips `AUTO_TRADING` off and stops). If Yahoo rate-limits GitHub's IPs, the scanner falls back to Alpaca's free IEX daily bars.
+
+**Setup:** add `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` as repo **secrets**, create the `AUTO_TRADING` **variable** (value `off`), edit `watchlist.txt`, and test with `python run_scanner.py --dry-run`.
+
 ### 📓 Flag journal & performance scoreboard
 
 Every fresh flag the server generates is logged to `data/flag_journal.db` (SQLite, gitignored). Once flags are 5/10/20 trading days old, outcomes are fetched automatically and scored (BUY correct if price rose, SELL if it fell).

@@ -22,7 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from stocks_agent.technicals import analyze_ticker  # also injects truststore for proxy TLS
-from . import journal
+from . import alpaca, journal
+from .scanner import get_auto_trading, set_auto_trading
 
 # "-latest" aliases always point at the current models, so they keep working
 # when Google retires specific versions. If the preferred model is overloaded
@@ -198,6 +199,68 @@ def _llm_answer(analysis: dict, symbol: str, question: str) -> Optional[str]:
 @app.get("/health")
 def health():
     return {"status": "ok", "llm": _llm_available(), "model": GEMINI_MODEL}
+
+
+class TradeRequest(BaseModel):
+    symbol: str
+
+
+class AutoTradeRequest(BaseModel):
+    on: bool
+
+
+def _alpaca_symbol(analysis: dict):
+    """Alpaca trades US-listed stocks only; reject suffixed/crypto symbols."""
+    sym = (analysis.get("yf_symbol") or "").upper()
+    if not sym or "." in sym or "-" in sym or "=" in sym:
+        return None
+    return sym
+
+
+@app.post("/papertrade")
+def papertrade(req: TradeRequest):
+    """Manual paper trade of the CURRENT flag: BUY -> buy $notional, SELL -> close."""
+    if not alpaca.configured():
+        return {"error": "Alpaca not configured — set ALPACA_API_KEY / ALPACA_SECRET_KEY in .envrc"}
+    analysis = _get_analysis(req.symbol)
+    if "error" in analysis:
+        return {"error": analysis["error"]}
+    sym = _alpaca_symbol(analysis)
+    if not sym:
+        return {"error": f"{analysis.get('yf_symbol')} isn't tradable on Alpaca (US stocks only)"}
+    flag = analysis["flag"]
+    try:
+        notional = float(os.getenv("TV_BOT_NOTIONAL", "1000"))
+        if flag == "BUY":
+            if not alpaca.tradable(sym):
+                return {"error": f"{sym} not tradable on Alpaca"}
+            order = alpaca.buy_notional(sym, notional)
+            return {"ok": True, "action": f"BUY ${notional:.0f} of {sym}",
+                    "order_id": order.get("id"), "flag": flag}
+        if flag == "SELL":
+            pos = alpaca.position(sym)
+            if not pos:
+                return {"error": f"Flag is SELL but you hold no {sym} — nothing to close"}
+            alpaca.close_position(sym)
+            return {"ok": True, "action": f"CLOSED {pos['qty']} {sym}", "flag": flag}
+        return {"error": "Flag is HOLD — no trade to take"}
+    except Exception as e:
+        return {"error": f"Alpaca error: {e}"}
+
+
+@app.get("/autotrade")
+def autotrade_state():
+    """Current state of the after-hours AUTO_TRADING switch (GitHub repo variable)."""
+    state = get_auto_trading()
+    return {"configured": state is not None, "enabled": state}
+
+
+@app.post("/autotrade")
+def autotrade_set(req: AutoTradeRequest):
+    if not set_auto_trading(req.on):
+        return {"error": "Could not update — set GITHUB_TOKEN and GITHUB_REPO in .envrc, "
+                         "or flip the AUTO_TRADING variable on github.com"}
+    return {"ok": True, "enabled": req.on}
 
 
 @app.get("/performance")
