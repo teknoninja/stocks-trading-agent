@@ -237,8 +237,8 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
     p = vb.load()
     say(f"Virtual portfolio: cash ₹{p['cash']:,.0f}, positions: {len(p['positions'])}")
 
-    # drawdown breaker vs starting cash is too blunt; use equity vs starting cash floor
     actions = []
+    prices: Dict[str, float] = {}
     open_count = len(p["positions"])
     for sym in watchlist:
         from stocks_agent.technicals import analyze_ticker
@@ -247,6 +247,7 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
             say(f"  {sym}: SKIP ({result['error'][:80]})")
             continue
         flag, conf, price = result["flag"], result.get("confidence", 0), result["price"]
+        prices[sym] = price
         pos = p["positions"].get(sym)
         say(f"  {sym}: {flag} conf={conf:.2f} score={result.get('score')} @₹{price}"
             + (f" | holding {pos['qty']}" if pos else ""))
@@ -277,8 +278,14 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
                     say(f"    -> SOLD {trade['qty']} @ ₹{price} (pnl ₹{trade['pnl']:,.0f})")
         time.sleep(1.5)
 
-    if actions and not dry_run:
+    # snapshot equity for the performance chart (positions without a fresh
+    # price fall back to their average buy price)
+    equity = p["cash"] + sum(
+        pos["qty"] * prices.get(s, pos["avg_price"]) for s, pos in p["positions"].items())
+    snapped = False if dry_run else vb.record_snapshot(p, equity)
+
+    if (actions or snapped) and not dry_run:
         vb.save(p)
-        say(f"Portfolio saved to {vb.PORTFOLIO_FILE}.")
+        say(f"Portfolio saved to {vb.PORTFOLIO_FILE} (equity ₹{equity:,.0f}).")
     say(f"Done. {len(actions)} action(s).")
     return {"status": "ok", "actions": actions, "log": log}

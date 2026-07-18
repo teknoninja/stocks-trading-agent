@@ -60,9 +60,11 @@
       <div id="tvb-conf" style="margin-top:6px;color:#9ca3af;font-size:11px">Browse the list and open any stock — I'll follow it and generate a flag.</div>
       <div id="tvb-reasons" style="margin-top:8px;font-size:11.5px;line-height:1.45;max-height:150px;overflow-y:auto"></div>
       <div style="margin-top:10px;display:flex;gap:6px">
-        <button id="tvb-trade" style="flex:1;background:#1b1f2a;border:1px solid #2d3342;color:#e5e7eb;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px">📄 Paper trade</button>
-        <button id="tvb-auto" style="flex:1;background:#1b1f2a;border:1px solid #2d3342;color:#9ca3af;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px">⏻ Auto: …</button>
+        <button id="tvb-buy" style="flex:1;background:#16a34a;border:none;color:#fff;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px;font-weight:700">📄 Buy</button>
+        <button id="tvb-sell" style="flex:1;background:#dc2626;border:none;color:#fff;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px;font-weight:700">📄 Sell</button>
+        <button id="tvb-auto" style="flex:1.2;background:#1b1f2a;border:1px solid #2d3342;color:#9ca3af;border-radius:8px;padding:7px 8px;cursor:pointer;font-size:12px">⏻ Auto: …</button>
       </div>
+      <div class="note" style="margin-top:5px;color:#6b7280;font-size:10px">Paper only — your call, even against the flag</div>
     </div>
     <div id="tvb-chat" style="flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px"></div>
     <div style="padding:10px 12px;border-top:1px solid #262a35;display:flex;gap:6px">
@@ -160,19 +162,21 @@
     $("tvb-llm").textContent = h.llm ? `LLM: ${h.model}` : "LLM: off (rule-based)";
   }).catch(() => { $("tvb-llm").textContent = "server off"; });
 
-  // ---------- paper trading ----------
-  $("tvb-trade").onclick = async () => {
+  // ---------- paper trading (explicit side — your call, even against the flag) ----------
+  async function paperTrade(side) {
     if (!currentSymbol) return;
-    const pending = addMsg(`submitting paper trade for ${currentSymbol}…`, "bot");
+    const pending = addMsg(`submitting paper ${side} for ${currentSymbol}…`, "bot");
     try {
       const r = await fetch(`${API}/papertrade`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: currentSymbol }),
+        body: JSON.stringify({ symbol: currentSymbol, side }),
       });
       const d = await r.json();
-      pending.textContent = d.ok ? `✅ ${d.action} (paper account)` : `⚠️ ${d.error}`;
+      pending.textContent = d.ok ? `✅ ${d.action}` : `⚠️ ${d.error}`;
     } catch (e) { pending.textContent = "Server unreachable."; }
-  };
+  }
+  $("tvb-buy").onclick = () => paperTrade("buy");
+  $("tvb-sell").onclick = () => paperTrade("sell");
 
   // ---------- after-hours auto-trading toggle ----------
   let autoState = null;

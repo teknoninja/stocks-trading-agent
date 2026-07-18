@@ -20,7 +20,10 @@ import requests
 
 PORTFOLIO_FILE = os.getenv("TV_BOT_PORTFOLIO", "nse_portfolio.json")
 START_CASH = float(os.getenv("TV_BOT_START_CASH_INR", "1000000"))   # ₹10,00,000
-NOTIONAL = float(os.getenv("TV_BOT_NOTIONAL_INR", "100000"))        # ₹1,00,000 per position
+NOTIONAL = float(os.getenv("TV_BOT_NOTIONAL_INR", "1000"))          # ₹ budget per position
+# NSE trades whole shares only. Many large-caps cost more than the budget per
+# single share, so a buy falls back to exactly 1 share when the budget is short.
+MIN_ONE_SHARE = os.getenv("TV_BOT_MIN_ONE_SHARE", "1") != "0"
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -46,9 +49,27 @@ def _default(starting_cash: float = START_CASH) -> dict:
         "cash": starting_cash,
         "positions": {},          # symbol -> {qty, avg_price}
         "trades": [],             # [{ts, symbol, side, qty, price}]
+        "equity_history": [],     # [{ts, equity}] snapshots for the chart
         "created_at": _now(),
         "updated_at": _now(),
     }
+
+
+def record_snapshot(portfolio: dict, equity: float, min_gap_minutes: int = 25) -> bool:
+    """Append an equity snapshot for the performance chart.
+
+    Deduped: skipped when the last snapshot is newer than min_gap_minutes.
+    Returns True when a snapshot was added (caller should save).
+    """
+    hist = portfolio.setdefault("equity_history", [])
+    if hist:
+        last = datetime.fromisoformat(hist[-1]["ts"])
+        age_min = (datetime.now(timezone.utc) - last).total_seconds() / 60
+        if age_min < min_gap_minutes:
+            return False
+    hist.append({"ts": _now(), "equity": round(equity, 2)})
+    del hist[:-5000]  # cap
+    return True
 
 
 def load(path: str = PORTFOLIO_FILE) -> dict:
@@ -77,6 +98,8 @@ def buy(portfolio: dict, symbol: str, price: float, notional: float = NOTIONAL) 
     if price <= 0:
         return None
     qty = int(min(notional, portfolio["cash"]) // price)
+    if qty <= 0 and MIN_ONE_SHARE and portfolio["cash"] >= price:
+        qty = 1  # budget below share price: take the smallest possible position
     if qty <= 0:
         return None
     cost = qty * price

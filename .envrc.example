@@ -23,7 +23,9 @@ export GITHUB_REPO='yourname/stocks-trading-agent'
 # export TV_BOT_MAX_POS='10'      # max open positions
 # export TV_BOT_MAX_DD='0.03'     # daily drawdown circuit breaker (3%)
 # export TV_BOT_START_CASH_INR='1000000'  # NSE virtual portfolio starting cash
-# export TV_BOT_NOTIONAL_INR='100000'     # ₹ per NSE position
+# export TV_BOT_NOTIONAL_INR='1000'       # ₹ budget per NSE position (whole shares;
+#                                         #  falls back to 1 share when price > budget)
+# export TV_BOT_MIN_ONE_SHARE='1'         # set 0 to strictly skip stocks above budget
 
 # OpenAI API Key
 export OPENAI_API_KEY='your-openai-api-key-here'

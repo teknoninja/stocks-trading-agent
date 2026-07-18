@@ -203,6 +203,7 @@ def health():
 
 class TradeRequest(BaseModel):
     symbol: str
+    side: Optional[str] = None  # "buy" | "sell" | None = follow the current flag
 
 
 class AutoTradeRequest(BaseModel):
@@ -217,33 +218,77 @@ def _alpaca_symbol(analysis: dict):
     return sym
 
 
+def _effective_side(analysis: dict, side: Optional[str]) -> Optional[str]:
+    """Explicit side wins; otherwise follow the flag (HOLD -> None)."""
+    if side in ("buy", "sell"):
+        return side
+    return {"BUY": "buy", "SELL": "sell"}.get(analysis["flag"])
+
+
+def _indian_papertrade(analysis: dict, side: Optional[str]) -> dict:
+    """Manual NSE paper trade against the built-in virtual portfolio."""
+    sym = analysis["yf_symbol"].upper()
+    price = analysis["price"]
+    act = _effective_side(analysis, side)
+    if act is None:
+        return {"error": "Flag is HOLD — use the Buy/Sell buttons to trade anyway"}
+    p = _load_portfolio()  # freshest copy (GitHub may have traded meanwhile)
+    if act == "buy":
+        trade = virtual_broker.buy(p, sym, price)
+        if not trade:
+            return {"error": f"Not enough virtual cash (₹{p['cash']:,.0f}) for one share of {sym} @ ₹{price}"}
+        action = f"BOUGHT {trade['qty']} {sym} @ ₹{price} (virtual NSE portfolio)"
+    else:
+        trade = virtual_broker.sell_all(p, sym, price)
+        if not trade:
+            return {"error": f"The virtual portfolio holds no {sym} — nothing to sell"}
+        action = f"SOLD {trade['qty']} {sym} @ ₹{price}, P&L ₹{trade['pnl']:,.0f} (virtual NSE portfolio)"
+    virtual_broker.save(p)
+    synced = virtual_broker.gh_push(p, f"Manual paper trade: {action}")
+    if not synced:
+        action += " — saved locally; push nse_portfolio.json so GitHub sees it"
+    return {"ok": True, "action": action, "flag": analysis["flag"]}
+
+
 @app.post("/papertrade")
 def papertrade(req: TradeRequest):
-    """Manual paper trade of the CURRENT flag: BUY -> buy $notional, SELL -> close."""
-    if not alpaca.configured():
-        return {"error": "Alpaca not configured — set ALPACA_API_KEY / ALPACA_SECRET_KEY in .envrc"}
+    """Manual paper trade of the CURRENT flag.
+
+    US symbols -> Alpaca paper account. Indian symbols (.NS/.BO) -> the
+    built-in NSE virtual portfolio shown on /performance.
+    """
     analysis = _get_analysis(req.symbol)
     if "error" in analysis:
         return {"error": analysis["error"]}
+    yf_sym = (analysis.get("yf_symbol") or "").upper()
+    if yf_sym.endswith(".NS") or yf_sym.endswith(".BO"):
+        try:
+            return _indian_papertrade(analysis, req.side)
+        except Exception as e:
+            return {"error": f"Virtual broker error: {e}"}
+    if not alpaca.configured():
+        return {"error": "Alpaca not configured — set ALPACA_API_KEY / ALPACA_SECRET_KEY in .envrc"}
     sym = _alpaca_symbol(analysis)
     if not sym:
-        return {"error": f"{analysis.get('yf_symbol')} isn't tradable on Alpaca (US stocks only)"}
+        return {"error": f"{analysis.get('yf_symbol')} isn't tradable here (US stocks via Alpaca, "
+                         "Indian stocks via the virtual portfolio — other markets unsupported)"}
     flag = analysis["flag"]
+    act = _effective_side(analysis, req.side)
+    if act is None:
+        return {"error": "Flag is HOLD — use the Buy/Sell buttons to trade anyway"}
     try:
         notional = float(os.getenv("TV_BOT_NOTIONAL", "1000"))
-        if flag == "BUY":
+        if act == "buy":
             if not alpaca.tradable(sym):
                 return {"error": f"{sym} not tradable on Alpaca"}
             order = alpaca.buy_notional(sym, notional)
-            return {"ok": True, "action": f"BUY ${notional:.0f} of {sym}",
+            return {"ok": True, "action": f"BUY ${notional:.0f} of {sym} (Alpaca paper)",
                     "order_id": order.get("id"), "flag": flag}
-        if flag == "SELL":
-            pos = alpaca.position(sym)
-            if not pos:
-                return {"error": f"Flag is SELL but you hold no {sym} — nothing to close"}
-            alpaca.close_position(sym)
-            return {"ok": True, "action": f"CLOSED {pos['qty']} {sym}", "flag": flag}
-        return {"error": "Flag is HOLD — no trade to take"}
+        pos = alpaca.position(sym)
+        if not pos:
+            return {"error": f"You hold no {sym} — nothing to sell"}
+        alpaca.close_position(sym)
+        return {"ok": True, "action": f"CLOSED {pos['qty']} {sym} (Alpaca paper)", "flag": flag}
     except Exception as e:
         return {"error": f"Alpaca error: {e}"}
 
@@ -288,7 +333,10 @@ def _load_portfolio() -> dict:
 @app.get("/portfolio")
 def portfolio():
     p = _load_portfolio()
-    return virtual_broker.valuation(p, _latest_price)
+    v = virtual_broker.valuation(p, _latest_price)
+    if virtual_broker.record_snapshot(p, v["equity"]):
+        virtual_broker.save(p)  # local snapshot for the chart; cloud runs add their own
+    return v
 
 
 @app.post("/portfolio/reset")
@@ -304,39 +352,197 @@ def portfolio_reset(req: ResetRequest):
             "with Contents read/write) so the GitHub scanner sees the reset."}
 
 
+def _nifty_series(since_iso: Optional[str]) -> list:
+    """NIFTY 50 daily closes since the first snapshot, for the benchmark line."""
+    from stocks_agent.technicals.data import _history
+    try:
+        df = _history("^NSEI", "6mo", "1d")
+        if df is None or df.empty:
+            return []
+        out = []
+        for ts, close in df["Close"].items():
+            iso = ts.isoformat()
+            if since_iso and iso[:10] < since_iso[:10]:
+                continue
+            out.append({"t": iso, "v": round(float(close), 2)})
+        return out
+    except Exception:
+        return []
+
+
 def _portfolio_html() -> str:
     try:
-        v = virtual_broker.valuation(_load_portfolio(), _latest_price)
+        p = _load_portfolio()
+        v = virtual_broker.valuation(p, _latest_price)
+        if virtual_broker.record_snapshot(p, v["equity"]):
+            virtual_broker.save(p)
+        history = [{"t": h["ts"], "e": h["equity"]} for h in p.get("equity_history", [])]
     except Exception as e:
         return f"<p class='note'>Portfolio unavailable: {e}</p>"
+
+    bench = _nifty_series(history[0]["t"] if history else None)
+    pnl = v["equity"] - v["starting_cash"]
+    up = pnl >= 0
+    pnl_color = "#4ade80" if up else "#f87171"
+    arrow = "▲" if up else "▼"
+
+    def inr(x):
+        return f"₹{x:,.2f}"
+
     pos_rows = "".join(
-        f"<tr><td>{r['symbol']}</td><td>{r['qty']}</td><td>{r['avg_price']}</td>"
-        f"<td>{r['price']}</td><td>{r['value']:,.0f}</td>"
-        f"<td style='color:{'#4ade80' if r['pnl'] >= 0 else '#f87171'}'>{r['pnl']:,.0f} ({r['pnl_pct']}%)</td></tr>"
+        f"""<tr>
+          <td><b>{r['symbol'].replace('.NS', '').replace('.BO', '')}</b>
+              <span style='color:#6b7280;font-size:10px'>{'NSE' if r['symbol'].endswith('.NS') else 'BSE'}</span><br>
+              <span class='note'>₹{r['price']:,} · avg ₹{r['avg_price']:,}</span></td>
+          <td style='text-align:right'>{inr(r['value'])}<br>
+              <span style='color:{"#4ade80" if r['pnl'] >= 0 else "#f87171"};font-size:11px'>
+              {"▲" if r['pnl'] >= 0 else "▼"} {inr(abs(r['pnl']))} ({r['pnl_pct']:+}%)</span></td>
+          <td style='text-align:right;color:#9ca3af'>{r['qty']}</td></tr>"""
         for r in v["positions"]
-    ) or "<tr><td colspan=6>No open positions.</td></tr>"
-    ret_color = "#4ade80" if v["total_return_pct"] >= 0 else "#f87171"
+    ) or "<tr><td colspan=3 class='note'>No open positions yet — paper trade an NSE stock or let the scanner run.</td></tr>"
+
+    import json as _json
     return f"""
 <h2>🇮🇳 NSE virtual portfolio (paper)</h2>
-<p class="note">Equity <b>₹{v['equity']:,.0f}</b> · cash ₹{v['cash']:,.0f} · invested ₹{v['market_value']:,.0f}
- · return <b style="color:{ret_color}">{v['total_return_pct']}%</b> on ₹{v['starting_cash']:,.0f} start
- · {v['n_trades']} trades</p>
-<table><tr><th>Symbol</th><th>Qty</th><th>Avg buy</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>{pos_rows}</table>
-<div style="margin:-14px 0 28px;display:flex;gap:8px;align-items:center">
+
+<div id="pf-chart-wrap" style="background:#141722;border:1px solid #262a35;border-radius:12px;padding:14px 14px 6px;margin-bottom:18px">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+    <span class="note" id="pf-chart-title">Performance</span>
+    <span style="flex:1"></span>
+    <span style="font-size:11px;color:#c3c2b7"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#3987e5;margin-right:4px"></span>Portfolio</span>
+    <span style="font-size:11px;color:#c3c2b7"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c98500;margin-right:4px"></span>NIFTY 50</span>
+  </div>
+  <div id="pf-chart" style="position:relative"></div>
+  <div style="display:flex;gap:6px;margin:8px 0 6px" id="pf-ranges"></div>
+</div>
+
+<table style="margin-top:0"><tr><th>Asset · price</th><th style="text-align:right">Value · P&amp;L</th><th style="text-align:right">Qty</th></tr>{pos_rows}</table>
+
+<table style="margin-top:-16px">
+  <tr><td style="color:#9ca3af">ALL HOLDINGS</td><td style="text-align:right"><b>{inr(v['market_value'])}</b></td></tr>
+  <tr><td style="color:#9ca3af">TOTAL P&amp;L</td><td style="text-align:right;color:{pnl_color}"><b>{arrow} {inr(abs(pnl))} ({v['total_return_pct']:+}%)</b></td></tr>
+  <tr><td style="color:#9ca3af">CASH</td><td style="text-align:right"><b>{inr(v['cash'])}</b></td></tr>
+  <tr><td style="color:#9ca3af">TOTAL</td><td style="text-align:right;font-size:15px"><b>{inr(v['equity'])}</b></td></tr>
+</table>
+
+<div style="margin:-10px 0 28px;display:flex;gap:8px;align-items:center">
   <input id="reset-amt" type="number" value="{int(v['starting_cash'])}" min="1000" step="1000"
     style="background:#1b1f2a;border:1px solid #2d3342;border-radius:8px;color:#e5e7eb;padding:7px 10px;width:160px"/>
   <button onclick="resetPortfolio()" style="background:#dc2626;border:none;color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600">Reset portfolio</button>
   <span class="note">wipes positions &amp; trades, restarts with the amount on the left</span>
 </div>
+
 <script>
+const PF_HISTORY = {_json.dumps(history)};
+const PF_BENCH = {_json.dumps(bench)};
+const PF_START = {v['starting_cash']};
+
 async function resetPortfolio() {{
   const amt = parseFloat(document.getElementById('reset-amt').value);
-  if (!confirm(`Reset the NSE virtual portfolio to ₹${{amt.toLocaleString()}}? All positions and trade history will be wiped.`)) return;
+  if (!confirm(`Reset the NSE virtual portfolio to ₹${{amt.toLocaleString('en-IN')}}? All positions and trade history will be wiped.`)) return;
   const r = await fetch('/portfolio/reset', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{starting_cash: amt}})}});
   const d = await r.json();
   alert(d.ok ? ('Portfolio reset.' + (d.note ? '\\n\\n' + d.note : '')) : d.error);
   location.reload();
 }}
+
+// ---- performance chart: % change, portfolio vs NIFTY, one axis ----
+(function () {{
+  const wrap = document.getElementById('pf-chart');
+  const W = Math.min(860, wrap.clientWidth || 860), H = 190, PAD = {{l: 44, r: 56, t: 10, b: 22}};
+  const RANGES = {{ '1W': 7, '1M': 30, '3M': 92, 'ALL': 100000 }};
+  let range = 'ALL';
+
+  const rangesEl = document.getElementById('pf-ranges');
+  Object.keys(RANGES).forEach((k) => {{
+    const b = document.createElement('button');
+    b.textContent = k;
+    b.style.cssText = 'background:none;border:1px solid #262a35;color:#9ca3af;border-radius:14px;padding:3px 12px;cursor:pointer;font-size:11px';
+    b.onclick = () => {{ range = k; draw(); paint(); }};
+    rangesEl.appendChild(b);
+  }});
+  function paint() {{
+    [...rangesEl.children].forEach((b) => {{
+      const on = b.textContent === range;
+      b.style.background = on ? '#1e2433' : 'none';
+      b.style.color = on ? '#e5e7eb' : '#9ca3af';
+    }});
+  }}
+
+  function draw() {{
+    const cutoff = Date.now() - RANGES[range] * 864e5;
+    let hist = PF_HISTORY.filter((h) => new Date(h.t).getTime() >= cutoff);
+    if (hist.length < 2) hist = PF_HISTORY.slice();
+    if (hist.length < 2) {{
+      wrap.innerHTML = '<p style="color:#6b7280;font-size:12px;padding:30px 0;text-align:center">The chart appears once a few equity snapshots accumulate (every scan and page view adds one).</p>';
+      return;
+    }}
+    const t0 = new Date(hist[0].t).getTime(), t1 = new Date(hist[hist.length - 1].t).getTime() || t0 + 1;
+    const base = hist[0].e;
+    const pf = hist.map((h) => ({{ t: new Date(h.t).getTime(), pct: (h.e / base - 1) * 100, raw: h.e }}));
+    const b0 = PF_BENCH.filter((b) => new Date(b.t).getTime() >= t0 - 864e5);
+    const bBase = b0.length ? b0[0].v : null;
+    const bench = bBase ? b0.map((b) => ({{ t: new Date(b.t).getTime(), pct: (b.v / bBase - 1) * 100 }})) : [];
+
+    const all = pf.map((p) => p.pct).concat(bench.map((b) => b.pct)).concat([0]);
+    let lo = Math.min(...all), hi = Math.max(...all);
+    const padY = Math.max(0.15, (hi - lo) * 0.15); lo -= padY; hi += padY;
+    const X = (t) => PAD.l + ((t - t0) / Math.max(1, t1 - t0)) * (W - PAD.l - PAD.r);
+    const Y = (p) => PAD.t + (1 - (p - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
+    const line = (pts) => pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p.pct).toFixed(1)).join(' ');
+    const fmtD = (t) => new Date(t).toLocaleDateString('en-IN', {{ day: 'numeric', month: 'short' }});
+
+    const gridVals = [lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.75];
+    let svg = `<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" style="display:block">`;
+    gridVals.forEach((g) => {{
+      svg += `<line x1="${{PAD.l}}" x2="${{W - PAD.r}}" y1="${{Y(g)}}" y2="${{Y(g)}}" stroke="#20242f" stroke-width="1"/>`;
+      if (Math.abs(Y(g) - Y(0)) > 14)  // keep the label from colliding with the 0% label
+        svg += `<text x="4" y="${{Y(g) + 3}}" fill="#6b7280" font-size="10">${{g.toFixed(1)}}%</text>`;
+    }});
+    svg += `<line x1="${{PAD.l}}" x2="${{W - PAD.r}}" y1="${{Y(0)}}" y2="${{Y(0)}}" stroke="#3a3f4d" stroke-width="1" stroke-dasharray="3 4"/>`;
+    svg += `<text x="4" y="${{Y(0) + 3}}" fill="#9ca3af" font-size="10">0%</text>`;
+    if (bench.length > 1) svg += `<path d="${{line(bench)}}" fill="none" stroke="#c98500" stroke-width="2" stroke-linejoin="round"/>`;
+    svg += `<path d="${{line(pf)}}" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round"/>`;
+
+    const endBadge = (pts, color, dy) => {{
+      if (pts.length < 2) return '';
+      const last = pts[pts.length - 1], txt = (last.pct >= 0 ? '+' : '') + last.pct.toFixed(2) + '%';
+      return `<g><rect x="${{W - PAD.r + 4}}" y="${{Y(last.pct) - 9 + dy}}" rx="6" width="50" height="16" fill="${{color}}"/>
+        <text x="${{W - PAD.r + 29}}" y="${{Y(last.pct) + 3 + dy}}" fill="#0b0b0b" font-size="10" font-weight="700" text-anchor="middle">${{txt}}</text></g>`;
+    }};
+    svg += endBadge(bench, '#c98500', -10);
+    svg += endBadge(pf, '#3987e5', 10);
+    svg += `<text x="${{PAD.l}}" y="${{H - 6}}" fill="#6b7280" font-size="10">${{fmtD(t0)}}</text>`;
+    svg += `<text x="${{W - PAD.r}}" y="${{H - 6}}" fill="#6b7280" font-size="10" text-anchor="end">${{fmtD(t1)}}</text>`;
+    svg += `<line id="pf-cross" x1="0" x2="0" y1="${{PAD.t}}" y2="${{H - PAD.b}}" stroke="#4b5563" stroke-width="1" visibility="hidden"/>`;
+    svg += `<circle id="pf-dot" r="4" fill="#3987e5" stroke="#141722" stroke-width="2" visibility="hidden"/>`;
+    svg += `</svg>`;
+    wrap.innerHTML = svg + '<div id="pf-tip" style="position:absolute;pointer-events:none;background:#1e2433;border:1px solid #2d3342;border-radius:8px;padding:6px 9px;font-size:11px;color:#e5e7eb;visibility:hidden;white-space:nowrap"></div>';
+
+    const svgEl = wrap.querySelector('svg'), tip = document.getElementById('pf-tip');
+    const cross = document.getElementById('pf-cross'), dot = document.getElementById('pf-dot');
+    svgEl.addEventListener('mousemove', (ev) => {{
+      const box = svgEl.getBoundingClientRect();
+      const mx = ((ev.clientX - box.left) / box.width) * W;
+      let best = pf[0], bd = 1e18;
+      pf.forEach((pt) => {{ const d = Math.abs(X(pt.t) - mx); if (d < bd) {{ bd = d; best = pt; }} }});
+      cross.setAttribute('x1', X(best.t)); cross.setAttribute('x2', X(best.t));
+      cross.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', X(best.t)); dot.setAttribute('cy', Y(best.pct));
+      dot.setAttribute('visibility', 'visible');
+      tip.style.visibility = 'visible';
+      tip.style.left = Math.min(X(best.t) / W * box.width + 12, box.width - 150) + 'px';
+      tip.style.top = (Y(best.pct) / H * box.height - 40) + 'px';
+      tip.innerHTML = `${{new Date(best.t).toLocaleString('en-IN', {{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}})}}<br>` +
+        `<b>₹${{best.raw.toLocaleString('en-IN')}}</b> (${{best.pct >= 0 ? '+' : ''}}${{best.pct.toFixed(2)}}%)`;
+    }});
+    svgEl.addEventListener('mouseleave', () => {{
+      cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden');
+      tip.style.visibility = 'hidden';
+    }});
+  }}
+  draw(); paint();
+}})();
 </script>"""
 
 
