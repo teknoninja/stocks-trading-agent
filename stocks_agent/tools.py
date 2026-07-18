@@ -1,0 +1,1579 @@
+"""Stock analysis tools - callable directly or via agents."""
+
+import yfinance as yf
+from typing import Dict, Any, List, Optional, Literal
+from datetime import datetime, timedelta
+import pandas as pd
+import re
+from io import StringIO
+import os
+import requests
+from datetime import timezone
+from minsearch import Index
+from tqdm import tqdm
+from pprint import pprint
+
+# Ticker deprecation mapping
+TICKER_MAPPING = {
+    'FB': 'META',
+    'GOOGL': 'GOOG',  # Sometimes consolidated
+}
+
+
+def normalize_ticker(ticker: str) -> str:
+    """Normalize ticker symbol, handling deprecations."""
+    ticker = ticker.upper().strip()
+    return TICKER_MAPPING.get(ticker, ticker)
+
+def get_company_info_basic(ticker: str) -> Dict[str, Any]:
+    """
+    Get basic company information including name, sector, industry, and key metrics.
+
+    Args:
+        ticker: Stock ticker symbol (e.g., 'AAPL', 'TSLA')
+
+    Returns:
+        Dictionary with company info including PE ratio, market cap, etc.
+
+    Data transformation:
+        RAW: yfinance stock.info dictionary (100+ fields)
+        TRANSFORMED: Extracts 15 key fields relevant for analysis
+
+    Example:
+        >>> info = get_company_info('AAPL')
+        >>> print(f"PE Ratio: {info['pe_ratio']}")
+    """
+    ticker = normalize_ticker(ticker)
+    stock = yf.Ticker(ticker)
+    info = stock.info
+
+    return {
+        'ticker': ticker,
+        'name': info.get('longName', 'N/A'),
+        'sector': info.get('sector', 'N/A'),
+        'industry': info.get('industry', 'N/A'),
+        'market_cap': info.get('marketCap', 'N/A'),
+        'pe_ratio': info.get('trailingPE', 'N/A'),
+        'forward_pe': info.get('forwardPE', 'N/A'),
+        'peg_ratio': info.get('pegRatio', 'N/A'),
+        'price_to_book': info.get('priceToBook', 'N/A'),
+        'dividend_yield': info.get('dividendYield', 'N/A'),
+        'beta': info.get('beta', 'N/A'),
+        'current_price': info.get('currentPrice', 'N/A'),
+        'target_price': info.get('targetMeanPrice', 'N/A'),
+        'recommendation': info.get('recommendationKey', 'N/A'),
+        'website': info.get('website', 'N/A'),
+    }
+
+
+def get_company_info(ticker: str) -> dict[str, Any]:
+    """
+    Get comprehensive company information and fundamental data for a stock ticker.
+    
+    Returns key metrics organized by category:
+    - Company basics: website, industry, sector, employees, officers
+    - Price data: current, previous close, day range, 52-week range
+    - Market metrics: market cap, volume, beta, PE ratios
+    - Valuation: margins, book value, price ratios
+    - Ownership: insider/institutional holdings, short interest
+    - Analyst data: EPS estimates, targets, recommendations
+    - Financial health: cash, returns, growth rates
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL', 'MSFT')
+    
+    Returns:
+        Dictionary with ticker and organized company information
+    """
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        info = ticker_obj.get_info()
+
+        if not info:
+            return {"ticker": ticker, "error": "No company info available"}
+
+        # Define the key fields to extract (organized by category)
+        key_fields = {
+            # Company basics
+            "company": ["website", "industry", "sector", "longBusinessSummary",
+                        "fullTimeEmployees", "companyOfficers", "region", "fullExchangeName"],
+
+            # Price data
+            "price": ["currentPrice", "previousClose", "open", "dayLow", "dayHigh",
+                    "regularMarketDayRange", "fiftyTwoWeekLow", "fiftyTwoWeekHigh",
+                    "fiftyTwoWeekRange", "allTimeHigh", "allTimeLow"],
+
+            # Market metrics
+            "market": ["marketCap", "volume", "averageVolume", "averageVolume10days",
+                    "beta", "trailingPE", "forwardPE", "trailingPegRatio"],
+
+            # Moving averages
+            "averages": ["fiftyDayAverage", "twoHundredDayAverage",
+                        "fiftyDayAverageChange", "twoHundredDayAverageChange"],
+
+            # Valuation ratios
+            "valuation": ["priceToSalesTrailing12Months", "priceToBook", "bookValue",
+                        "profitMargins", "grossMargins", "ebitdaMargins", "operatingMargins"],
+
+            # Ownership & short interest
+            "ownership": ["sharesOutstanding", "floatShares", "sharesPercentSharesOut",
+                        "heldPercentInsiders", "heldPercentInstitutions",
+                        "sharesShort", "shortRatio", "shortPercentOfFloat"],
+
+            # EPS & earnings
+            "earnings": ["trailingEps", "forwardEps", "earningsQuarterlyGrowth",
+                        "earningsGrowth", "revenueGrowth", "epsTrailingTwelveMonths",
+                        "epsForward", "epsCurrentYear"],
+
+            # Analyst targets & recommendations
+            "analyst": ["targetHighPrice", "targetLowPrice", "targetMeanPrice",
+                        "targetMedianPrice", "recommendationMean", "recommendationKey",
+                        "numberOfAnalystOpinions", "averageAnalystRating"],
+
+            # Financial health
+            "financial": ["totalCash", "totalCashPerShare", "totalDebt", "totalRevenue",
+                        "freeCashflow", "operatingCashflow", "returnOnAssets",
+                        "returnOnEquity", "debtToEquity", "currentRatio", "quickRatio"]
+        }
+
+        # Extract data by category
+        result = {"ticker": ticker}
+
+        for category, fields in key_fields.items():
+            category_data = {}
+            for field in fields:
+                if field in info:
+                    category_data[field] = info[field]
+            if category_data:
+                result[category] = category_data # type: ignore
+
+        return result
+
+    except Exception as e:
+        return {"ticker": ticker, "error": f"Failed to get company info: {str(e)}"}
+
+
+
+def get_eps_trend(ticker: str) -> dict[str, Any]:
+    """
+    Get the EPS (Earnings Per Share) trend for a given stock ticker - showing how analyst consensus has changed over time for different periods (quarterly, yearly)
+    and diffent points in the past (current, 7daysAgo, 30daysAgo, etc.).
+    Index: 0q (This Quarter),  +1q (Next Quarter),  0y (This Year),  +1y (Next Year) 
+    and columns showing estimates from different points in the past (current, 7daysAgo, 30daysAgo, etc.). 
+
+    Args:
+        ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL', 'MSFT')
+    
+    Returns:
+        Dictionary with ticker and EPS trend data
+    """
+
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        result = ticker_obj.get_eps_trend()
+
+        if isinstance(result, pd.DataFrame):
+            if result.empty:
+                return {"ticker": ticker, "error": "No EPS trend data available"}
+            result['period']=result.index # create a new column 'period' from the index
+            return {"ticker": ticker, "data": result.to_dict(orient='records')}
+
+        # Fallback: wrap unexpected types
+        if isinstance(result, dict):
+            return {"ticker": ticker, "data": [result]}
+
+        raise TypeError(f"Unexpected return type from get_eps_trend: {type(result)}")
+
+    except Exception as e:
+        return {"ticker": ticker, "error": f"Failed to get EPS trend: {str(e)}"}
+
+
+
+def get_earnings_dates(ticker: str) -> dict[str, Any]:
+    """
+    Get earnings call dates for a stock ticker.
+    
+    Returns historical earnings data including:
+    - Expected EPS
+    - Actual EPS  
+    - Surprise percentage
+    - Earnings dates from multiple quarters and years
+    - Next earnings call date
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL', 'MSFT')
+
+    Returns:
+        Dictionary with ticker and earnings dates data, surprise (%) - how reported earnings compared to expectations
+    """
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        result = ticker_obj.get_earnings_dates()
+
+        if isinstance(result, pd.DataFrame):
+            if result.empty:
+                return {"ticker": ticker, "error": "No earnings data available"}
+
+            # Normalize common datetime-like columns to yyyy-mm-dd strings
+            result.index = pd.to_datetime(result.index, errors="coerce").strftime("%Y-%m-%d")
+          
+            # Include the index (dates) as a column before converting to dict
+            result = result.reset_index().rename(columns={"index": "date"})
+            return {"ticker": ticker, "data": result.to_dict(orient='records')}
+
+        # Unexpected type fallback
+        raise TypeError(f"Unexpected return type from get_earnings_dates: {type(result)}")
+
+    except Exception as e:
+        return {"ticker": ticker, "error": f"Failed to get earnings dates: {str(e)}"}
+
+
+def get_earnings_analysis(ticker: str) -> Dict[str, Any]:
+    """
+    Get analyst earnings and EPS analysts estimates and revisions.
+
+    Combines multiple analyst data sources:
+    0. Basic Analyst Info - Count, recommendation, target prices
+    1. Earnings Estimates - Consensus EPS estimates (avg, low, high, year-ago, analyst count)
+    2. EPS Revisions - How analysts have revised estimates (up/down last 7/30 days)
+    3. Growth Estimates - Expected earnings growth vs index benchmark
+    4. Earnings History - Historical actual vs estimated EPS with surprise %
+    
+    Args:
+        ticker: Stock ticker symbol
+
+    Returns:
+        Dictionary with analyst estimates and sentiment
+
+    Data transformation:
+        RAW: yfinance stock.info dictionary
+        TRANSFORMED: Extracts analyst-related fields (recommendations, targets)
+    """
+
+    ticker = normalize_ticker(ticker)
+    ticker_obj = yf.Ticker(ticker)
+    
+    result = {
+            "ticker": ticker,
+            "basic_analyst_info": None,
+            "earnings_estimates": None,
+            "eps_revisions": None,
+            "growth_estimates": None,
+            "earnings_history": None
+    }
+
+    # 0. Basic Analyst Info
+    # Extract key analyst fields from stock.info
+
+    try:
+        info = ticker_obj.info    
+        result["basic_analyst_info"] = {
+            "analyst_count": info.get('numberOfAnalystOpinions', 'N/A'),
+            "recommendation": info.get('recommendationKey', 'N/A'),
+            "recommendation_mean": info.get('recommendationMean', 'N/A'),
+            "target_high": info.get('targetHighPrice', 'N/A'),
+            "target_low": info.get('targetLowPrice', 'N/A'),
+            "target_mean": info.get('targetMeanPrice', 'N/A'),
+            "target_median": info.get('targetMedianPrice', 'N/A'),
+            "current_price": info.get('currentPrice', 'N/A'),
+        }
+    except Exception as e:
+            result["basic_analyst_info"] = {"error": str(e)}
+
+    # 1. Get earnings estimates
+    try:
+        earnings_est = ticker_obj.get_earnings_estimate()
+        if isinstance(earnings_est, pd.DataFrame) and not earnings_est.empty:
+            earnings_est = earnings_est.reset_index().rename(columns={"index": "period"})
+            result["earnings_estimates"] = earnings_est.to_dict(orient='records')
+    except Exception as e:
+        result["earnings_estimates"] = {"error": str(e)}
+
+    # 2. Get EPS revisions
+    try:
+        eps_rev = ticker_obj.get_eps_revisions()
+        if isinstance(eps_rev, pd.DataFrame) and not eps_rev.empty:
+            eps_rev = eps_rev.reset_index().rename(columns={"index": "period"})
+            result["eps_revisions"] = eps_rev.to_dict(orient='records')
+    except Exception as e:
+        result["eps_revisions"] = {"error": str(e)}
+
+    # 3. Get growth estimates
+    try:
+        growth_est = ticker_obj.get_growth_estimates()
+        if isinstance(growth_est, pd.DataFrame) and not growth_est.empty:
+            growth_est = growth_est.reset_index().rename(columns={"index": "period"})
+            result["growth_estimates"] = growth_est.to_dict(orient='records')
+    except Exception as e:
+        result["growth_estimates"] = {"error": str(e)}
+
+    # 4. Get earnings history
+    try:
+        earnings_hist = ticker_obj.get_earnings_history()
+        if isinstance(earnings_hist, pd.DataFrame) and not earnings_hist.empty:
+            earnings_hist = earnings_hist.reset_index().rename(columns={"index": "quarter"})
+            result["earnings_history"] = earnings_hist.to_dict(orient='records')
+    except Exception as e:
+        result["earnings_history"] = {"error": str(e)}
+
+    # Check if we got any data at all
+    has_data = any(
+        result[key] is not None and not isinstance(result[key], dict) or (isinstance(result[key], dict) and "error" not in result[key])
+        for key in ["earnings_estimates", "eps_revisions", "growth_estimates", "earnings_history"]
+    )
+
+    if not has_data:
+        return {"ticker": ticker, "error": "No earnings analysis data available"}
+
+    return result
+
+
+def get_historical_prices(ticker: str, period: str = '1y', interval: str = '1d') -> Dict[str, Any]:
+    """
+    Get historical price data - return key statistics and trends.
+    This is a simplified version focusing on key metrics. 
+    NO FULL TIME SERIES RETURNED.
+
+    Args:
+        ticker: Stock ticker symbol
+        period: Time period ('1mo', '3mo', '6mo', '1y', '2y', '5y', 'max')
+        interval: Data interval ('1d', '1wk', '1mo')
+
+    Returns:
+        Dictionary with price history and key statistics
+
+    Data transformation:
+        RAW: yfinance history DataFrame (OHLCV data for each period)
+        CALCULATED:
+            - distance_from_high_pct = (current - 52w_high) / 52w_high * 100
+            - distance_from_low_pct = (current - 52w_low) / 52w_low * 100
+            - avg_volume = mean of all volume data
+        DERIVED:
+            - momentum = 'positive' if price > MA20 > MA50
+                       = 'negative' if price < MA20 < MA50
+                       = 'mixed' otherwise
+    """
+    ticker = normalize_ticker(ticker)
+    stock = yf.Ticker(ticker)
+
+    hist = stock.history(period=period, interval=interval)
+
+    if hist.empty:
+        return {
+            'ticker': ticker,
+            'error': 'No price data available'
+        }
+
+    # Calculate key metrics
+    current_price = hist['Close'].iloc[-1]
+    period_high = hist['High'].max()
+    period_low = hist['Low'].min()
+    avg_volume = hist['Volume'].mean()
+
+    # Price momentum
+    if len(hist) >= 20:
+        ma_20 = hist['Close'].tail(20).mean()
+        ma_50 = hist['Close'].tail(50).mean() if len(hist) >= 50 else ma_20
+        momentum = 'positive' if current_price > ma_20 > ma_50 else 'negative' if current_price < ma_20 < ma_50 else 'mixed'
+    else:
+        momentum = 'insufficient_data'
+
+    return {
+        'ticker': ticker,
+        'period': period,
+        'interval': interval,
+        'current_price': float(current_price),
+        'period_high': float(period_high),
+        'period_low': float(period_low),
+        'distance_from_high_pct': float((current_price - period_high) / period_high * 100),
+        'distance_from_low_pct': float((current_price - period_low) / period_low * 100),
+        'avg_volume': float(avg_volume),
+        'momentum': momentum,
+        'data_points': len(hist),
+    }
+
+
+def get_ticker_news(ticker: str, limit: int = 50) -> Dict[str, Any]:
+    """
+    Get recent news for a specific ticker (sourced from yfinance).
+
+    Args:
+        ticker: Stock ticker symbol
+        limit: Maximum number of news items to return
+
+    Returns:
+        Dictionary with news articles
+
+    Data transformation:
+        RAW: yfinance stock.news list (nested structure with 'content' wrapper)
+        TRANSFORMED: Flattens nested structure, extracts key fields:
+                     - title, publisher, link, published date, description, summary
+                     - Handles both old and new yfinance API formats
+    """
+    ticker = normalize_ticker(ticker)
+    stock = yf.Ticker(ticker)
+
+    news = stock.news if hasattr(stock, 'news') else []
+
+    news_items = []
+    for item in news[:limit]:
+        # Handle new yfinance API format (content nested)
+        if 'content' in item:
+            content = item['content']
+            news_items.append({
+                'title': content.get('title', 'N/A'),
+                'publisher': content.get('provider', {}).get('displayName', 'N/A'),
+                'link': content.get('canonicalUrl', {}).get('url', 'N/A'),
+                'published': content.get('pubDate', 'N/A'),
+                'description': content.get('description', ''),
+                'summary': content.get('summary', '')
+            })
+        else:
+            # Handle old format (fallback)
+            news_items.append({
+                'title': item.get('title', 'N/A'),
+                'publisher': item.get('publisher', 'N/A'),
+                'link': item.get('link', 'N/A'),
+                'published': datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d %H:%M') if item.get('providerPublishTime') else 'N/A',
+                'summary': ''
+            })
+
+    return {
+        'ticker': ticker,
+        'news_count': len(news_items),
+        'news': news_items
+    }
+
+# ================ Additional Search Tools ===================
+
+# Global variable to store the news index (built once, reused)
+_news_index = None
+_news_documents = None
+
+def build_polygon_news_index(api_calls: int = 5, news_per_call: int = 1000) -> dict[str, Any]:
+    """
+    Fetch news from Polygon.io (Massive.com) and build a searchable index.
+    
+    This should be called once to fetch and index news. The index is stored
+    globally and reused by search functions.
+    
+    Args:
+        api_calls: Number of API calls to make (default: 5, fetches ~5000 articles)
+        news_per_call: Number of news articles per API call (max: 1000)
+    
+    Returns:
+        Dictionary with status and article count
+    """
+    global _news_index, _news_documents
+
+    try:
+        api_key = os.getenv('POLYGON_API_KEY')
+        if not api_key:
+            return {"error": "POLYGON_API_KEY not found in environment"}
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        all_news = None
+        max_date = now
+
+        print(f"Fetching {api_calls * news_per_call} news articles...")
+
+        for i in tqdm(range(api_calls), desc="API calls"):
+            url = f"https://api.massive.com/v2/reference/news?order=desc&limit={news_per_call}&sort=published_utc&published_utc.lt={max_date}&apiKey={api_key}"
+
+            try:
+                r = requests.get(url, timeout=10)
+                r.raise_for_status()
+                data = r.json()
+
+                if 'results' not in data:
+                    print(f"No 'results' in response. Keys: {data.keys()}")
+                    continue
+
+                cur = pd.json_normalize(data['results'])
+
+                if all_news is None:
+                    all_news = cur
+                else:
+                    all_news = pd.concat([all_news, cur], ignore_index=True)
+
+                max_date = cur.published_utc.min()
+
+            except requests.exceptions.RequestException as e:
+                print(f"API call {i+1} failed: {e}")
+                continue
+
+        if all_news is None or all_news.empty:
+            return {"error": "Failed to fetch news articles"}
+
+        # Convert to documents
+        _news_documents = all_news.to_dict(orient='records')
+
+        # Preprocess documents
+        print("Preprocessing documents...")
+        for doc in tqdm(_news_documents, desc="Converting fields"):
+            if isinstance(doc.get('tickers'), list):
+                doc['tickers'] = ', '.join(doc['tickers'])
+            if isinstance(doc.get('keywords'), list):
+                doc['keywords'] = ', '.join(doc['keywords'])
+
+            for field in ['title', 'description', 'author']:
+                if doc.get(field) is None:
+                    doc[field] = ''
+                elif not isinstance(doc.get(field), str):
+                    doc[field] = str(doc[field])
+
+        # Build index
+        print("Building search index...")
+        _news_index = Index(
+            text_fields=["title", "description", "keywords", "author", "tickers"],
+            keyword_fields=["published_utc", "publisher.name"]
+        )
+        _news_index.fit(_news_documents)
+
+        return {
+            "status": "success",
+            "articles_indexed": len(_news_documents),
+            "message": f"Index built with {len(_news_documents)} articles"
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to build news index: {str(e)}"}
+
+def search_news_by_ticker(ticker: str, query: str = "", num_results: int = 30) -> dict[str, Any]:
+    """
+    Search indexed news articles for a specific stock ticker.
+    
+    Searches across title, description, keywords, and tickers with boosting
+    that prioritizes ticker matches.
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'TSLA', 'AAPL', 'GOOGL')
+        num_results: Maximum number of results to return (default: 30)
+    
+    Returns:
+        Dictionary with ticker and matching news articles
+    """
+    global _news_index
+
+    if _news_index is None:
+        # build the index automatically if not present
+        result = build_polygon_news_index(api_calls=5)
+        pprint(result)
+        # return {
+        #     "ticker": ticker,
+        #     "error": "News index not built. Call build_polygon_news_index() first."
+        # }
+
+    try:
+        results = _news_index.search( # type: ignore
+            query=ticker+(" " + query if query else ""),
+            num_results=num_results,
+            boost_dict={
+                'tickers': 5.0,      # Highest boost for ticker field
+                'title': 3.0,        # High boost for title
+                'description': 1.5,  # Medium boost for description
+                'keywords': 1.0      # Standard boost for keywords
+            }
+        )
+
+        return {
+            "ticker": ticker,
+            "count": len(results),
+            "data": results
+        }
+
+    except Exception as e:
+        return {"ticker": ticker, "error": f"Search failed: {str(e)}"}
+
+
+def search_news_by_query(query: str, num_results: int = 30) -> dict[str, Any]:
+    """
+    Search indexed news articles by free-text query.
+    
+    Searches across title, description, keywords, and tickers with boosting
+    that prioritizes description and keyword matches.
+    
+    Args:
+        query: Search query (e.g., 'Tesla competitors EV market', 'AI robotics')
+        num_results: Maximum number of results to return (default: 30)
+    
+    Returns:
+        Dictionary with query and matching news articles
+    """
+    global _news_index
+
+    if _news_index is None:
+        # build the index automatically if not present
+        result = build_polygon_news_index(api_calls=5)
+        pprint(result)
+        # return {
+        #     "query": query,
+        #     "error": "News index not built. Call build_polygon_news_index() first."
+        # }
+
+    try:
+        results = _news_index.search( # type: ignore
+            query=query,
+            num_results=num_results,
+            boost_dict={
+                'tickers': 1.0,       # Standard boost for ticker field
+                'title': 3.0,         # High boost for title
+                'description': 5.0,   # Highest boost for description
+                'keywords': 5.0       # Highest boost for keywords
+            }
+        )
+
+        return {
+            "query": query,
+            "count": len(results),
+            "data": results
+        }
+
+    except Exception as e:
+        return {"query": query, "error": f"Search failed: {str(e)}"}
+
+
+
+# Global variables to cache the databases
+_companies_marketcap_db = None
+_companies_pe_db = None
+_companies_dividend_db = None
+_companies_margin_db = None
+_unified_db = None
+
+def load_all_companies_databases(force_refresh: bool = False) -> dict[str, Any]:
+    """
+    Download and load all company databases from companiesmarketcap.com.
+    
+    Loads 4 databases:
+    1. Market Cap - Top companies by market capitalization
+    2. P/E Ratio - Top companies by price-to-earnings ratio
+    3. Dividend Yield - Top companies by dividend yield percentage
+    4. Operating Margin - Top companies by operating margin percentage
+    
+    The databases are cached globally and merged by ticker symbol for unified searching.
+    Use force_refresh=True to re-download.
+    
+    Args:
+        force_refresh: If True, re-download all databases even if cached
+    
+    Returns:
+        Dictionary with status and database info
+    """
+    global _companies_marketcap_db, _companies_pe_db, _companies_dividend_db
+    global _companies_margin_db, _unified_db
+
+    # Return cached data if available
+    if _unified_db is not None and not force_refresh:
+        df = pd.DataFrame(_unified_db)
+        return {
+            "status": "loaded_from_cache",
+            "total_companies": len(_unified_db),
+            "available_columns": list(df.columns),
+            "message": f"All databases loaded from cache"
+        }
+
+    try:
+        databases = {
+            "marketcap": "https://companiesmarketcap.com/usd/?download=csv",
+            "pe_ratio": "https://companiesmarketcap.com/top-companies-by-pe-ratio/?download=csv",
+            "dividend": "https://companiesmarketcap.com/top-companies-by-dividend-yield/?download=csv",
+            "margin": "https://companiesmarketcap.com/top-companies-by-operating-margin/?download=csv"
+        }
+
+        loaded = {}
+
+        for name, url in databases.items():
+            print(f"Downloading {name} database...")
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                csv_data = StringIO(response.text)
+                df = pd.read_csv(csv_data)
+                loaded[name] = df
+                print(f"✓ Loaded {len(df)} companies from {name}")
+            except Exception as e:
+                print(f"✗ Failed to load {name}: {e}")
+                loaded[name] = None
+
+        # Store individual databases
+        _companies_marketcap_db = loaded["marketcap"]
+        _companies_pe_db = loaded["pe_ratio"]
+        _companies_dividend_db = loaded["dividend"]
+        _companies_margin_db = loaded["margin"]
+
+        # Merge all databases by Symbol for unified view
+        print("\nMerging databases...")
+
+        # Start with market cap as base
+        unified = loaded["marketcap"].copy()
+
+        # Merge P/E ratio - only keep pe_ratio_ttm column
+        if loaded["pe_ratio"] is not None and 'pe_ratio_ttm' in loaded["pe_ratio"].columns:
+            pe_df = loaded["pe_ratio"][['Symbol', 'pe_ratio_ttm']]
+            unified = unified.merge(pe_df, on='Symbol', how='left')
+            print(f"✓ Added P/E ratio column")
+
+        # Merge Dividend yield - only keep dividend_yield_ttm column
+        if loaded["dividend"] is not None and 'dividend_yield_ttm' in loaded["dividend"].columns:
+            div_df = loaded["dividend"][['Symbol', 'dividend_yield_ttm']]
+            # Convert percentage to decimal
+            div_df['dividend_yield_ttm'] = div_df['dividend_yield_ttm'] / 100.0 
+            unified = unified.merge(div_df, on='Symbol', how='left')
+            print(f"✓ Added Dividend yield column")
+
+        # Merge Operating margin - only keep operating_margin_ttm column
+        if loaded["margin"] is not None and 'operating_margin_ttm' in loaded["margin"].columns:
+            margin_df = loaded["margin"][['Symbol', 'operating_margin_ttm']]
+            # Convert percentage to decimal
+            margin_df['operating_margin_ttm'] = margin_df['operating_margin_ttm']/100.0
+            unified = unified.merge(margin_df, on='Symbol', how='left')
+            print(f"✓ Added Operating margin column")
+
+        print(f"\nFinal columns: {list(unified.columns)}")
+
+        _unified_db = unified.to_dict(orient='records')
+
+        return {
+            "status": "success",
+            "databases_loaded": {
+                "marketcap": len(loaded["marketcap"]) if loaded["marketcap"] is not None else 0,
+                "pe_ratio": len(loaded["pe_ratio"]) if loaded["pe_ratio"] is not None else 0,
+                "dividend": len(loaded["dividend"]) if loaded["dividend"] is not None else 0,
+                "margin": len(loaded["margin"]) if loaded["margin"] is not None else 0
+            },
+            "total_companies": len(_unified_db),
+            "available_columns": list(unified.columns),
+            "message": f"All databases merged with {len(_unified_db)} unique companies"
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to load databases: {str(e)}"}
+
+
+def get_available_columns() -> dict[str, Any]:
+    """
+    Get list of available columns in the unified database.
+    
+    Returns:
+        Dictionary with available column names
+    """
+    global _unified_db
+
+    if _unified_db is None:
+        return {"error": "Database not loaded. Call load_all_companies_databases() first."}
+
+    df = pd.DataFrame(_unified_db)
+    return {
+        "columns": list(df.columns),
+        "total_columns": len(df.columns)
+    }
+
+
+def search_companies(
+    query: Optional[str] = None,
+    ticker: Optional[str] = None,
+    min_market_cap: Optional[float] = None,
+    max_market_cap: Optional[float] = None,
+    min_pe: Optional[float] = None,
+    max_pe: Optional[float] = None,
+    min_dividend: Optional[float] = None,
+    max_dividend: Optional[float] = None,
+    min_margin: Optional[float] = None,
+    max_margin: Optional[float] = None,
+    country: Optional[str] = None,
+    limit: int = 50
+) -> dict[str, Any]:
+    """
+    Search companies across all databases with comprehensive filtering.
+    
+    Args:
+        query: Search by company name (case-insensitive partial match)
+        ticker: Search by exact ticker symbol
+        min_market_cap: Minimum market cap in USD
+        max_market_cap: Maximum market cap in USD
+        min_pe: Minimum P/E ratio
+        max_pe: Maximum P/E ratio
+        min_dividend: Minimum dividend yield (%)
+        max_dividend: Maximum dividend yield (%)
+        min_margin: Minimum operating margin (%)
+        max_margin: Maximum operating margin (%)
+        country: Filter by country (e.g., 'USA', 'China')
+        limit: Maximum number of results (default: 50)
+    
+    Returns:
+        Dictionary with matching companies and all available metrics
+    """
+    global _unified_db
+
+    if _unified_db is None:
+        # Load databases
+        result = load_all_companies_databases(force_refresh=True)
+        pprint(result)
+        # return {"error": "Database not loaded. Call load_all_companies_databases() first."}
+
+    try:
+        df = pd.DataFrame(_unified_db)
+
+        # Apply filters
+        if ticker:
+            df = df[df['Symbol'].str.upper() == ticker.upper()]
+
+        if query:
+            df = df[df['Name'].str.contains(query, case=False, na=False)]
+
+        if min_market_cap is not None:
+            df = df[df['marketcap'] >= min_market_cap]
+
+        if max_market_cap is not None:
+            df = df[df['marketcap'] <= max_market_cap]
+
+        if 'pe_ratio_ttm' in df.columns:
+            if min_pe is not None:
+                df = df[pd.to_numeric(df['pe_ratio_ttm'], errors='coerce') >= min_pe]
+            if max_pe is not None:
+                df = df[pd.to_numeric(df['pe_ratio_ttm'], errors='coerce') <= max_pe]
+
+        if 'dividend_yield_ttm' in df.columns:
+            if min_dividend is not None:
+                df = df[pd.to_numeric(df['dividend_yield_ttm'], errors='coerce') >= min_dividend]
+            if max_dividend is not None:
+                df = df[pd.to_numeric(df['dividend_yield_ttm'], errors='coerce') <= max_dividend]
+
+        if 'operating_margin_ttm' in df.columns:
+            if min_margin is not None:
+                df = df[pd.to_numeric(df['operating_margin_ttm'], errors='coerce') >= min_margin]
+            if max_margin is not None:
+                df = df[pd.to_numeric(df['operating_margin_ttm'], errors='coerce') <= max_margin]
+
+        if country:
+            df = df[df['country'].str.upper() == country.upper()]
+
+        # Limit results
+        df = df.head(limit)
+
+        if df.empty:
+            return {
+                "count": 0,
+                "message": "No companies found matching criteria"
+            }
+
+        return {
+            "count": len(df),
+            "data": df.to_dict(orient='records')
+        }
+
+    except Exception as e:
+        return {"error": f"Search failed: {str(e)}"}
+
+
+def get_top_value_companies(
+    min_dividend: float = 2.0/100.0, # 2%
+    max_pe: float = 25,
+    min_margin: float = 10/100.0, # 10%
+    min_market_cap: float = 1_000_000_000,
+    limit: int = 50
+) -> dict[str, Any]:
+    """
+    Find potential value companies based on fundamental criteria.
+    
+    Default criteria:
+    - Dividend yield >= 2%
+    - P/E ratio <= 25
+    - Operating margin >= 10%
+    - Market cap >= $1B
+    
+    Args:
+        min_dividend: Minimum dividend yield %
+        max_pe: Maximum P/E ratio
+        min_margin: Minimum operating margin %
+        min_market_cap: Minimum market cap
+        limit: Maximum results
+    
+    Returns:
+        Dictionary with companies meeting value criteria
+    """
+    return search_companies(
+        min_dividend=min_dividend,
+        max_pe=max_pe,
+        min_margin=min_margin,
+        min_market_cap=min_market_cap,
+        limit=limit
+    )
+
+
+def get_top_growth_companies(
+    min_margin: float = 20/100.0, # 20%
+    max_pe: Optional[float] = None,
+    min_market_cap: float = 1_000_000_000,
+    limit: int = 50
+) -> dict[str, Any]:
+    """
+    Find potential growth companies based on fundamental criteria.
+    
+    Default criteria:
+    - Operating margin >= 20% (high profitability)
+    - Market cap >= $1B
+    
+    Args:
+        min_margin: Minimum operating margin %
+        max_pe: Maximum P/E ratio (optional)
+        min_market_cap: Minimum market cap
+        limit: Maximum results
+    
+    Returns:
+        Dictionary with companies meeting growth criteria
+    """
+    return search_companies(
+        min_margin=min_margin,
+        max_pe=max_pe,
+        min_market_cap=min_market_cap,
+        limit=limit
+    )
+
+
+
+def get_recent_x_posts(ticker: str, max_posts: int = 5, sort_by: str = "engagement") -> Dict[str, Any]:
+    """
+    Get recent Twitter/X posts about a stock using xAI's x_search tool.
+    
+    Args:
+        ticker: Stock ticker symbol
+        max_posts: Maximum number of posts to return (1-20)
+        sort_by: "engagement" (views+likes+replies) or "recent" (timestamp)
+        
+    Returns:
+        Dictionary with real X/Twitter posts and metadata
+        
+    Example:
+        >>> posts = get_recent_x_posts("TSLA", 3, "engagement")
+        >>> print(posts['response'])
+    """
+    api_key = os.getenv('XAI_API_KEY')
+    if not api_key:
+        return {
+            'ticker': ticker,
+            'error': 'XAI_API_KEY not found. Set it in your .envrc file.',
+            'posts': []
+        }
+    
+    try:
+        import openai
+        
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        
+        # Build search query based on sorting preference
+        if sort_by == "engagement":
+            sort_instruction = """
+            IMPORTANT: Sort by HIGHEST ENGAGEMENT (total impact) first.
+            - Calculate engagement score = views + likes + replies + retweets
+            - Show the posts with highest engagement numbers first
+            - These are the most impactful/viral posts about the stock
+            """
+        else:
+            sort_instruction = "Sort by most recent timestamp first."
+        
+        search_query = f"""
+        Search X/Twitter for posts about ${ticker} stock from the last 24 hours.
+        
+        {sort_instruction}
+        
+        For each of the {max_posts} posts, provide:
+        - Post content
+        - Author username
+        - Exact engagement metrics: views, likes, replies, retweets, bookmarks
+        - Timestamp
+        - Real working X.com link
+        - Sentiment analysis
+        
+        Focus on posts with substantial engagement that show real market impact.
+        Format each post clearly showing the engagement numbers prominently.
+        """
+        
+        # Use Responses API with x_search tool
+        response = client.responses.create(
+            model="grok-4.3",
+            input=search_query,
+            tools=[{"type": "x_search"}]
+        )
+        
+        # Extract response content
+        content = ""
+        for item in response.output:
+            if item.type == "message":
+                for content_block in item.content:
+                    if content_block.type == "output_text":
+                        content += content_block.text
+        
+        return {
+            'ticker': ticker,
+            'response': content,
+            'posts': [],
+            'sort_by': sort_by,
+            'platform': 'X/Twitter',
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+    except Exception as e:
+        return {
+            'ticker': ticker,
+            'error': f'X search error: {str(e)}',
+            'posts': []
+        }
+
+
+def get_sec_filing(
+    ticker: str,
+    filing_type: Literal["annual", "quarterly"] = "quarterly",
+    periods_ago: int = 0,
+) -> dict[str, Any]:
+    """
+    Get the text of an SEC filing.
+
+    Args:
+        ticker: Stock ticker (e.g. AAPL, MSFT, TSLA)
+        filing_type:
+            - "quarterly" -> 10-Q
+            - "annual" -> 10-K
+        periods_ago:
+            Which filing to retrieve.
+            0 = latest
+            1 = previous filing
+            2 = two filings ago
+            ...
+
+    Returns:
+        Dictionary containing filing metadata and text.
+    """
+
+    try:
+        sec_email = os.getenv("SEC_IDENTITY_EMAIL")
+        if not sec_email:
+            return {
+                "success": False,
+                "error": "SEC_IDENTITY_EMAIL not set in environment",
+            }
+
+        from edgar import Company, set_identity
+        set_identity(sec_email)
+
+        form = {
+            "quarterly": "10-Q",
+            "annual": "10-K",
+        }[filing_type]
+
+        company = Company(ticker)
+
+        filings = company.get_filings(form=form)
+
+        filing_list = list(filings)
+
+        if periods_ago >= len(filing_list):
+            return {
+                "success": False,
+                "ticker": ticker,
+                "filing_type": filing_type,
+                "periods_ago": periods_ago,
+                "available_filings": len(filing_list),
+                "error": f"Only {len(filing_list)} {form} filings available.",
+            }
+
+        filing = filing_list[periods_ago]
+        text = filing.text()
+
+        return {
+            "success": True,
+            "ticker": ticker,
+            "filing_type": filing_type,
+            "form": form,
+            "periods_ago": periods_ago,
+            "filing_date": getattr(filing, "filing_date", None),
+            "accession_number": getattr(filing, "accession_number", None),
+            "text_length": len(text),
+            "text": text,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "ticker": ticker,
+            "filing_type": filing_type,
+            "periods_ago": periods_ago,
+            "error": str(e),
+        }
+
+
+def get_twitter_posts_by_engagement(
+    ticker: str, 
+    max_posts: int = 5, 
+    days_back: int = 1,
+    min_engagement: int = 100
+) -> Dict[str, Any]:
+    """
+    Get Twitter/X posts about a stock, sorted by HIGHEST ENGAGEMENT (viral posts).
+    
+    Engagement = views + likes + replies + retweets + bookmarks
+    Posts are sorted by total engagement to find the most impactful discussions.
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'TSLA', 'AAPL')
+        max_posts: Number of posts to return (default: 5)
+        days_back: How many days to look back (default: 1)
+        min_engagement: Minimum engagement threshold (default: 100)
+    
+    Returns:
+        Dictionary with ticker, posts data, and metadata
+    """
+    api_key = os.getenv('XAI_API_KEY')
+    if not api_key:
+        return {
+            'success': False,
+            'ticker': ticker,
+            'error': 'XAI_API_KEY not found in environment'
+        }
+    
+    try:
+        import openai
+        
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        
+        # Calculate date range
+        from_date = datetime.now() - timedelta(days=days_back)
+        to_date = datetime.now()
+        
+        search_query = f"""
+        Search X/Twitter for HIGH-ENGAGEMENT posts about ${ticker} stock from the last {days_back} day(s).
+        
+        **CRITICAL SORTING REQUIREMENT:**
+        - Sort by HIGHEST ENGAGEMENT first (most viral/impactful)
+        - Engagement score = views + likes + replies + retweets + bookmarks
+        - Only show posts with {min_engagement}+ total engagement
+        
+        **For each of the top {max_posts} posts, provide:**
+        1. **Engagement Metrics** (prominently displayed):
+           - Total engagement score
+           - Views, Likes, Replies, Retweets, Bookmarks (breakdown)
+        2. **Post Content**: Full text
+        3. **Author**: Username and verification status
+        4. **Timestamp**: Exact time posted
+        5. **Link**: Working X.com URL
+        6. **Sentiment**: Bullish/Bearish/Neutral with reasoning
+        7. **Why it matters**: Why this post is significant/viral
+        
+        **Focus on:**
+        - Posts from verified accounts, analysts, or influencers
+        - Posts that generated real discussion/impact
+        - News reactions, earnings discussion, technical analysis
+        - Skip spam, bots, or low-quality posts
+        
+        Date range: {from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}
+        
+        Return the {max_posts} MOST VIRAL posts sorted by engagement score (highest first).
+        """
+        
+        response = client.responses.create(
+            model="grok-4.3",
+            input=search_query,
+            tools=[{"type": "x_search"}]
+        )
+        
+        # Extract content
+        content = ""
+        for item in response.output:
+            if item.type == "message":
+                for content_block in item.content:
+                    if content_block.type == "output_text":
+                        content += content_block.text
+        
+        return {
+            'success': True,
+            'ticker': ticker,
+            'response': content,
+            'search_params': {
+                'max_posts': max_posts,
+                'days_back': days_back,
+                'min_engagement': min_engagement,
+                'date_range': f"{from_date.strftime('%Y-%m-%d')} to {to_date.strftime('%Y-%m-%d')}",
+                'sort_by': 'engagement_desc'
+            },
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'platform': 'Twitter/X'
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'ticker': ticker,
+            'error': f'Twitter search failed: {str(e)}'
+        }
+
+
+def get_reddit_discussions_by_impact(
+    ticker: str,
+    max_posts: int = 5,
+    days_back: int = 7,
+    min_upvotes: int = 50
+) -> Dict[str, Any]:
+    """
+    Get Reddit discussions about a stock, sorted by HIGHEST IMPACT.
+    
+    Impact = upvotes + comments + awards (weighted)
+    Searches major investment subreddits for quality discussions.
+    
+    Args:
+        ticker: Stock ticker symbol (e.g., 'TSLA', 'AAPL')
+        max_posts: Number of posts to return (default: 5)
+        days_back: How many days to look back (default: 7)
+        min_upvotes: Minimum upvotes threshold (default: 50)
+    
+    Returns:
+        Dictionary with ticker, posts data, and metadata
+    """
+    api_key = os.getenv('XAI_API_KEY')
+    if not api_key:
+        return {
+            'success': False,
+            'ticker': ticker,
+            'error': 'XAI_API_KEY not found in environment'
+        }
+    
+    try:
+        import openai
+        
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        
+        reddit_query = f"""
+        Search Reddit for HIGH-IMPACT discussions about ${ticker} stock from the last {days_back} days.
+        
+        **TARGET SUBREDDITS (search these specifically):**
+        - r/investing (serious investment analysis)
+        - r/stocks (general stock discussion)
+        - r/SecurityAnalysis (fundamental analysis)
+        - r/ValueInvesting (value perspective)
+        - r/wallstreetbets (retail sentiment & options activity)
+        - r/StockMarket (market discussion)
+        - Ticker-specific subs if they exist (e.g., r/TeslaInvestorsClub for TSLA)
+        
+        **CRITICAL SORTING REQUIREMENT:**
+        - Sort by HIGHEST IMPACT score first
+        - Impact score = upvotes + (comments × 2) + (awards × 5)
+        - Only posts with {min_upvotes}+ upvotes
+        
+        **CONTENT PRIORITIES (in order):**
+        1. DD (Due Diligence) posts with financial analysis
+        2. Earnings reaction threads with substantial discussion
+        3. News reaction posts with quality comments
+        4. Technical/fundamental analysis
+        5. Catalyst discussions (product launches, regulatory news, etc.)
+        
+        **For each of the top {max_posts} posts, provide:**
+        1. **Subreddit & Title**
+        2. **Impact Metrics**:
+           - Upvotes
+           - Comments count
+           - Awards (Gold, Silver, Helpful, etc.)
+           - Impact score calculation
+        3. **Content Summary**: Post summary + key insights from top comments
+        4. **Sentiment**: Bullish/Bearish/Neutral with reasoning
+        5. **Key Takeaways**: 2-3 main investment insights
+        6. **Quality Level**: High/Medium (based on analysis depth)
+        7. **Link**: Direct Reddit URL
+        8. **Author credibility**: Note if author has history of quality posts
+        
+        **Focus on:**
+        - Posts that provide real investment insights
+        - Quality discussions in comments
+        - Fundamental or technical analysis
+        - Skip memes, low-effort posts, pure speculation
+        
+        Return the {max_posts} HIGHEST IMPACT posts sorted by impact score (highest first).
+        Filter for posts from the last {days_back} days only.
+        """
+        
+        response = client.responses.create(
+            model="grok-4.3",
+            input=reddit_query,
+            tools=[{"type": "web_search"}]
+        )
+        
+        # Extract content
+        content = ""
+        for item in response.output:
+            if item.type == "message":
+                for content_block in item.content:
+                    if content_block.type == "output_text":
+                        content += content_block.text
+        
+        return {
+            'success': True,
+            'ticker': ticker,
+            'response': content,
+            'search_params': {
+                'max_posts': max_posts,
+                'days_back': days_back,
+                'min_upvotes': min_upvotes,
+                'sort_by': 'impact_score_desc'
+            },
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'platform': 'Reddit'
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'ticker': ticker,
+            'error': f'Reddit search failed: {str(e)}'
+        }
+
+
+def get_social_sentiment(
+    ticker: str,
+    include_twitter: bool = True,
+    include_reddit: bool = True,
+    days_back: int = 3
+) -> dict[str, Any]:
+    """
+    Get combined social media sentiment from Twitter and Reddit.
+    
+    Returns top posts from both platforms sorted by engagement/impact.
+    
+    Args:
+        ticker: Stock ticker symbol
+        include_twitter: Include Twitter/X posts (default: True)
+        include_reddit: Include Reddit discussions (default: True)
+        days_back: How many days to look back (default: 3)
+    
+    Returns:
+        Dictionary with combined social sentiment data
+    """
+    results = {
+        'ticker': ticker,
+        'days_back': days_back,
+        'twitter': None,
+        'reddit': None,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    if include_twitter:
+        results['twitter'] = get_twitter_posts_by_engagement(
+            ticker=ticker,
+            max_posts=5,
+            days_back=days_back,
+            min_engagement=100
+        )
+    
+    if include_reddit:
+        results['reddit'] = get_reddit_discussions_by_impact(
+            ticker=ticker,
+            max_posts=5,
+            days_back=days_back,
+            min_upvotes=50
+        )
+    
+    return results
+
+
+def get_reddit_stock_discussions(ticker: str, max_posts: int = 5, min_engagement: int = 50) -> Dict[str, Any]:
+    """
+    Get high-engagement Reddit discussions about a stock using web_search.
+    DEPRECATED: Use get_reddit_discussions_by_impact instead for better sorting.
+    
+    Args:
+        ticker: Stock ticker symbol
+        max_posts: Maximum number of posts to return
+        min_engagement: Minimum engagement threshold (upvotes + comments)
+        
+    Returns:
+        Dictionary with Reddit discussions and metadata
+        
+    Example:
+        >>> reddit = get_reddit_stock_discussions("TSLA", 3, 50)
+        >>> print(reddit['response'])
+    """
+    api_key = os.getenv('XAI_API_KEY')
+    if not api_key:
+        return {
+            'ticker': ticker,
+            'error': 'XAI_API_KEY not found. Set it in your .envrc file.',
+            'posts': []
+        }
+    
+    try:
+        import openai
+        
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        
+        # Reddit-focused search query
+        reddit_query = f"""
+        Search Reddit for high-quality discussions about ${ticker} stock from the last 7 days.
+        
+        **TARGET SUBREDDITS:**
+        - r/investing (serious investment analysis)
+        - r/stocks (general stock discussion)  
+        - r/SecurityAnalysis (fundamental analysis)
+        - r/ValueInvesting (value perspective)
+        - r/wallstreetbets (retail sentiment & options)
+        - r/StockMarket (market discussion)
+        - r/financialindependence (long-term investing)
+        - Ticker-specific subs if they exist (like r/Tesla for TSLA)
+        
+        **ENGAGEMENT CRITERIA:**
+        - Posts with {min_engagement}+ upvotes OR 30+ comments
+        - Comments with 20+ upvotes
+        - Awarded posts (Gold, Silver, Helpful, etc.)
+        - Active discussions (not just single comments)
+        
+        **CONTENT TYPES TO PRIORITIZE:**
+        1. DD (Due Diligence) posts with detailed analysis
+        2. Earnings reaction/discussion threads
+        3. News reaction posts with substantial comments
+        4. Technical/fundamental analysis posts
+        5. Company catalyst discussions
+        6. Valuation debates
+        
+        **OUTPUT FORMAT for each post:**
+        
+        **[Subreddit Name]** - Post Title
+        **Content:** Brief summary of post + key insights from top comments
+        **Stats:** X upvotes, Y comments, Z awards
+        **Link:** Direct Reddit URL
+        **Sentiment:** Bullish/Bearish/Neutral with reasoning
+        **Key Points:** 2-3 main takeaways from the discussion
+        **Quality Level:** High/Medium (based on depth of analysis)
+        
+        Return the {max_posts} most valuable Reddit discussions about ${ticker}, sorted by engagement and discussion quality.
+        Focus on posts that provide real investment insights, not just price speculation.
+        """
+        
+        # Use Responses API with web_search tool
+        response = client.responses.create(
+            model="grok-4.3",
+            input=reddit_query,
+            tools=[{"type": "web_search"}]
+        )
+        
+        # Extract content
+        content = ""
+        for item in response.output:
+            if item.type == "message":
+                for content_block in item.content:
+                    if content_block.type == "output_text":
+                        content += content_block.text
+        
+        return {
+            'ticker': ticker,
+            'response': content,
+            'posts': [],
+            'platform': 'Reddit',
+            'min_engagement': min_engagement,
+            'search_timeframe': 'last_7_days',
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+    except Exception as e:
+        return {
+            'ticker': ticker,
+            'error': f'Reddit search error: {str(e)}',
+            'posts': []
+        }
+
+
+def get_technical_flag(ticker: str) -> Dict[str, Any]:
+    """
+    Run the full multi-strategy technical analysis engine and return a
+    BUY / SELL / HOLD flag with confidence and per-strategy evidence.
+
+    Strategies covered (computed on weekly/daily/4H/1H yfinance data):
+    - Market structure (HH/HL vs LH/LL), BOS and CHOCH detection
+    - Supply/demand zones, order blocks, liquidity sweeps (smart-money concepts)
+    - Multi-timeframe alignment, RSI/MACD divergences
+    - Volume profile (VPOC, value area), anchored VWAP
+    - Harmonic patterns (Gartley/Bat/Butterfly/Crab), Elliott heuristic, Wyckoff phases
+    - Mean reversion (z-score/Bollinger), trend following (EMA/ADX/golden cross), breakouts
+    - Options positioning (put/call ratio, ATM implied volatility)
+
+    Args:
+        ticker: Stock ticker or TradingView symbol (e.g. 'AAPL', 'NSE:RELIANCE')
+
+    Returns:
+        Dictionary with flag, score (-1..1), confidence (0..1), bullish/bearish
+        reasons, and the full per-signal breakdown.
+    """
+    from .technicals import analyze_ticker
+    result = analyze_ticker(ticker)
+    # trim raw signal payloads to keep LLM context small
+    if "signals" in result:
+        result["signals"] = [
+            {k: s[k] for k in ("name", "timeframe", "direction_label", "strength", "detail")}
+            for s in result["signals"]
+        ]
+    return result
+
+
+# ================= Agent Tool Wrappers ===================
+# Import function_tool decorator for agent use
+try:
+    from agents import function_tool
+
+    # Create decorated versions for agents
+    get_company_info_tool = function_tool(get_company_info)
+    get_company_info_basic_tool = function_tool(get_company_info_basic)
+    get_eps_trend_tool = function_tool(get_eps_trend)
+    get_earnings_dates_tool = function_tool(get_earnings_dates)
+    get_earnings_analysis_tool = function_tool(get_earnings_analysis)
+    get_historical_prices_tool = function_tool(get_historical_prices)
+    get_ticker_news_tool = function_tool(get_ticker_news)
+    search_news_by_ticker_tool = function_tool(search_news_by_ticker)
+    search_news_by_query_tool = function_tool(search_news_by_query)
+    search_companies_tool = function_tool(search_companies)
+    get_top_value_companies_tool = function_tool(get_top_value_companies)
+    get_top_growth_companies_tool = function_tool(get_top_growth_companies)
+    get_recent_x_posts_tool = function_tool(get_recent_x_posts)
+    get_reddit_stock_discussions_tool = function_tool(get_reddit_stock_discussions)
+    # New SEC and enhanced social media tools
+    get_sec_filing_tool = function_tool(get_sec_filing)
+    get_technical_flag_tool = function_tool(get_technical_flag)
+    get_twitter_posts_by_engagement_tool = function_tool(get_twitter_posts_by_engagement)
+    get_reddit_discussions_by_impact_tool = function_tool(get_reddit_discussions_by_impact)
+    get_social_sentiment_tool = function_tool(get_social_sentiment)
+
+    # List of all tools for agent use - ONLY safe, enhanced tools
+    AGENT_TOOLS = [
+        # Core financial data tools
+        get_company_info_tool,
+        get_eps_trend_tool,
+        get_earnings_dates_tool,
+        get_earnings_analysis_tool,
+        get_historical_prices_tool,
+        get_ticker_news_tool,
+        search_news_by_ticker_tool,
+        search_news_by_query_tool,
+        search_companies_tool,
+        get_top_value_companies_tool,
+        get_top_growth_companies_tool,
+        
+        # Technical analysis flag engine (BUY/SELL/HOLD)
+        get_technical_flag_tool,
+
+        # Enhanced SEC and social media tools (safe versions)
+        get_sec_filing_tool,
+        get_twitter_posts_by_engagement_tool,
+        get_reddit_discussions_by_impact_tool,
+        get_social_sentiment_tool,
+    ]
+
+except ImportError:
+    # If openai_agents not available, tools can still be used directly
+    AGENT_TOOLS = []
