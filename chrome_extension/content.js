@@ -61,7 +61,10 @@
     <div style="padding:12px 14px;border-bottom:1px solid #262a35">
       <div style="display:flex;align-items:center;gap:10px">
         <div>
-          <div id="tvb-symbol" style="font-weight:700;font-size:15px">—</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div id="tvb-symbol" style="font-weight:700;font-size:15px">—</div>
+            <button id="tvb-watch" title="Add/remove from scanner watchlist" style="background:none;border:none;color:#6b7280;font-size:17px;cursor:pointer;padding:0;line-height:1">☆</button>
+          </div>
           <div id="tvb-price" style="color:#9ca3af;font-size:12px"></div>
         </div>
         <div style="flex:1"></div>
@@ -82,7 +85,8 @@
       <button id="tvb-send" style="background:#2962ff;border:none;color:#fff;border-radius:8px;padding:8px 12px;cursor:pointer;font-weight:600">➤</button>
     </div>
     <div style="padding:4px 12px 8px;color:#6b7280;font-size:10px;text-align:center">Educational only — not financial advice ·
-      <a href="http://127.0.0.1:8765/performance" target="_blank" style="color:#60a5fa">performance</a></div>`;
+      <a href="http://127.0.0.1:8765/performance" target="_blank" style="color:#60a5fa">performance</a> ·
+      <a href="http://127.0.0.1:8765/watchlists" target="_blank" style="color:#60a5fa">watchlists</a></div>`;
   document.body.appendChild(panel);
 
   const toggle = document.createElement("button");
@@ -178,6 +182,29 @@
   $("tvb-buy").onclick = () => paperTrade("buy");
   $("tvb-sell").onclick = () => paperTrade("sell");
 
+  // ---------- scanner watchlist toggle ----------
+  function paintWatch(st) {
+    const b = $("tvb-watch");
+    if (!st || !st.supported) { b.textContent = "☆"; b.style.color = "#3a3f4d"; b.title = "Not supported (US/NSE only)"; return; }
+    b.textContent = st.watching ? "★" : "☆";
+    b.style.color = st.watching ? "#eda100" : "#6b7280";
+    b.title = st.watching ? `On the ${st.market.toUpperCase()} scanner watchlist — click to remove`
+                          : `Add to the ${st.market.toUpperCase()} scanner watchlist`;
+  }
+  function refreshWatch(sym) {
+    api(`/watchlist/status?symbol=${encodeURIComponent(sym)}`).then(paintWatch).catch(() => paintWatch(null));
+  }
+  $("tvb-watch").onclick = async () => {
+    if (!currentSymbol) return;
+    try {
+      const d = await api("/watchlist/toggle", { symbol: currentSymbol });
+      if (d.error) { addMsg(`⚠️ ${d.error}`, "bot"); return; }
+      paintWatch({ supported: true, watching: d.watching, market: d.market });
+      addMsg(`${d.watching ? "⭐" : "☆"} ${d.action}${d.note ? " — " + d.note : ""}. ` +
+        (d.watching ? "The auto-scanner will now trade it when Auto is ON." : "The auto-scanner will ignore it now."), "bot");
+    } catch (e) { addMsg("Server unreachable.", "bot"); }
+  };
+
   // ---------- after-hours auto-trading toggle ----------
   let autoState = null; // null=unknown/unconfigured, true/false=state
   function paintAuto() {
@@ -219,6 +246,7 @@
       $("tvb-chat").innerHTML = "";
       addMsg(`Now watching ${s}. Ask me anything — e.g. "why this flag?", "where are the demand zones?", "is there divergence?"`, "bot");
       refreshAnalysis(s);
+      refreshWatch(s);
     }
   }, 1500);
   }

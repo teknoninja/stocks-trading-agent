@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from stocks_agent.technicals import analyze_ticker  # also injects truststore for proxy TLS
-from . import alpaca, journal, virtual_broker
+from . import alpaca, journal, virtual_broker, watchlists
 from .scanner import get_auto_trading, set_auto_trading
 
 # "-latest" aliases always point at the current models, so they keep working
@@ -546,6 +546,86 @@ async function resetPortfolio() {{
 </script>"""
 
 
+class WatchRequest(BaseModel):
+    symbol: str
+
+
+@app.get("/watchlist")
+def watchlist_json():
+    return watchlists.get_lists()
+
+
+@app.get("/watchlist/status")
+def watchlist_status(symbol: str):
+    return watchlists.status(symbol)
+
+
+@app.post("/watchlist/toggle")
+def watchlist_toggle(req: WatchRequest):
+    return watchlists.toggle(req.symbol)
+
+
+_NAV = ("<div style='margin-bottom:18px;font-size:12px'>"
+        "<a href='/performance' style='color:#60a5fa;margin-right:14px'>📊 Performance</a>"
+        "<a href='/watchlists' style='color:#60a5fa'>⭐ Watchlists</a></div>")
+
+
+@app.get("/watchlists")
+def watchlists_page():
+    from fastapi.responses import HTMLResponse
+    lists = watchlists.get_lists()
+
+    def section(title, market, symbols, note):
+        rows = "".join(
+            f"<tr><td><b>{s}</b></td>"
+            f"<td style='text-align:right'><button onclick=\"toggleSym('{s}')\" "
+            f"style='background:none;border:1px solid #3a2d2d;color:#f87171;border-radius:6px;"
+            f"padding:2px 10px;cursor:pointer;font-size:11px'>✕ remove</button></td></tr>"
+            for s in symbols
+        ) or "<tr><td colspan=2 class='note'>Empty — add a symbol below or use ★ in the sidebar.</td></tr>"
+        return f"""<h2>{title}</h2><p class="note">{note}</p>
+<table style="max-width:420px"><tr><th>Symbol</th><th></th></tr>{rows}</table>"""
+
+    html = f"""<!doctype html><html><head><meta charset="utf-8"><title>Watchlists</title>
+<style>
+ body{{background:#0f1117;color:#e5e7eb;font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:24px;max-width:900px;margin:auto}}
+ table{{border-collapse:collapse;width:100%;margin:12px 0 28px;font-size:13px}}
+ th,td{{padding:6px 10px;border-bottom:1px solid #262a35;text-align:left}}
+ th{{color:#9ca3af;font-weight:600}} h1{{font-size:20px}} h2{{font-size:15px;color:#e5e7eb}}
+ .note{{color:#6b7280;font-size:12px}}
+</style></head><body>
+<h1>⭐ Scanner watchlists</h1>{_NAV}
+<p style="background:#1e2433;border:1px solid #2d3342;border-radius:8px;padding:10px 12px;font-size:12.5px;color:#e5e7eb">
+⚠️ When <b>Auto trading is ON</b>, the scanner will auto buy/sell <b>only the stocks listed below</b>.
+Remove a stock from its watchlist if you don't want the scanner to act on it —
+removing it stops future scanner actions but does <b>not</b> sell anything you already hold.</p>
+<p class="note">Changes sync to the GitHub repo, so the cloud scanner uses your updated lists from its next run.
+Manual Buy/Sell buttons in the sidebar are unaffected by these lists.</p>
+{section("🇺🇸 US — Alpaca paper account", "us", lists["us"], "Traded during US market hours (9:30 PM–4 AM SGT).")}
+{section("🇮🇳 India — NSE virtual portfolio", "in", lists["in"], "Traded during NSE hours (11:45 AM–6 PM SGT). Yahoo .NS form.")}
+<div style="display:flex;gap:8px;align-items:center;max-width:420px">
+  <input id="new-sym" placeholder="e.g. NVDA or NSE:WIPRO or WIPRO.NS"
+    style="flex:1;background:#1b1f2a;border:1px solid #2d3342;border-radius:8px;color:#e5e7eb;padding:8px 10px"/>
+  <button onclick="addSym()" style="background:#2962ff;border:none;color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600">Add</button>
+</div>
+<p class="note" style="margin-top:8px">The market (US / India) is detected automatically from the symbol.</p>
+<script>
+async function toggleSym(s) {{
+  const r = await fetch('/watchlist/toggle', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{symbol: s}})}});
+  const d = await r.json();
+  if (d.error) alert(d.error); else if (d.note) alert(d.action + '\\n\\n' + d.note);
+  location.reload();
+}}
+function addSym() {{
+  const s = document.getElementById('new-sym').value.trim();
+  if (s) toggleSym(s);
+}}
+document.getElementById('new-sym').addEventListener('keydown', (e) => {{ if (e.key === 'Enter') addSym(); }});
+</script>
+</body></html>"""
+    return HTMLResponse(html)
+
+
 @app.get("/performance")
 def performance():
     """Scoreboard + NSE virtual portfolio. Refreshes outcomes first."""
@@ -555,6 +635,7 @@ def performance():
     except Exception:
         pass  # show whatever is already scored even if Yahoo is flaky
     html = journal.render_html().replace("</body>", _portfolio_html() + "</body>")
+    html = html.replace("</h1>", "</h1>" + _NAV, 1)
     return HTMLResponse(html)
 
 
