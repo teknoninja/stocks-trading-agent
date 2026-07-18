@@ -1,8 +1,6 @@
 # Indian (NSE) symbols the virtual paper broker may trade — Yahoo .NS form.
-# One per line, lines starting with # are comments. Edit freely and commit.
 RELIANCE.NS
 TCS.NS
-INFY.NS
 HDFCBANK.NS
 ICICIBANK.NS
 SBIN.NS
