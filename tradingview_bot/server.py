@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from stocks_agent.technicals import analyze_ticker  # also injects truststore for proxy TLS
-from . import alpaca, journal
+from . import alpaca, journal, virtual_broker
 from .scanner import get_auto_trading, set_auto_trading
 
 # "-latest" aliases always point at the current models, so they keep working
@@ -263,15 +263,93 @@ def autotrade_set(req: AutoTradeRequest):
     return {"ok": True, "enabled": req.on}
 
 
+class ResetRequest(BaseModel):
+    starting_cash: float
+
+
+def _latest_price(symbol: str):
+    from stocks_agent.technicals.data import _history
+    try:
+        df = _history(symbol, "5d", "1d")
+        return float(df["Close"].iloc[-1]) if df is not None and not df.empty else None
+    except Exception:
+        return None
+
+
+def _load_portfolio() -> dict:
+    """Prefer the repo copy (GitHub Actions may have traded since we last pulled)."""
+    remote = virtual_broker.gh_fetch()
+    if remote:
+        virtual_broker.save(remote)  # keep local file in sync for the scanner
+        return remote
+    return virtual_broker.load()
+
+
+@app.get("/portfolio")
+def portfolio():
+    p = _load_portfolio()
+    return virtual_broker.valuation(p, _latest_price)
+
+
+@app.post("/portfolio/reset")
+def portfolio_reset(req: ResetRequest):
+    if req.starting_cash <= 0:
+        return {"error": "Starting amount must be positive"}
+    p = virtual_broker.reset(req.starting_cash)
+    synced = virtual_broker.gh_push(p, f"Reset NSE virtual portfolio to {req.starting_cash:,.0f}")
+    return {"ok": True, "starting_cash": req.starting_cash,
+            "synced_to_github": synced,
+            "note": None if synced else
+            "Saved locally only — commit & push nse_portfolio.json (or set GITHUB_TOKEN "
+            "with Contents read/write) so the GitHub scanner sees the reset."}
+
+
+def _portfolio_html() -> str:
+    try:
+        v = virtual_broker.valuation(_load_portfolio(), _latest_price)
+    except Exception as e:
+        return f"<p class='note'>Portfolio unavailable: {e}</p>"
+    pos_rows = "".join(
+        f"<tr><td>{r['symbol']}</td><td>{r['qty']}</td><td>{r['avg_price']}</td>"
+        f"<td>{r['price']}</td><td>{r['value']:,.0f}</td>"
+        f"<td style='color:{'#4ade80' if r['pnl'] >= 0 else '#f87171'}'>{r['pnl']:,.0f} ({r['pnl_pct']}%)</td></tr>"
+        for r in v["positions"]
+    ) or "<tr><td colspan=6>No open positions.</td></tr>"
+    ret_color = "#4ade80" if v["total_return_pct"] >= 0 else "#f87171"
+    return f"""
+<h2>🇮🇳 NSE virtual portfolio (paper)</h2>
+<p class="note">Equity <b>₹{v['equity']:,.0f}</b> · cash ₹{v['cash']:,.0f} · invested ₹{v['market_value']:,.0f}
+ · return <b style="color:{ret_color}">{v['total_return_pct']}%</b> on ₹{v['starting_cash']:,.0f} start
+ · {v['n_trades']} trades</p>
+<table><tr><th>Symbol</th><th>Qty</th><th>Avg buy</th><th>Price</th><th>Value</th><th>P&amp;L</th></tr>{pos_rows}</table>
+<div style="margin:-14px 0 28px;display:flex;gap:8px;align-items:center">
+  <input id="reset-amt" type="number" value="{int(v['starting_cash'])}" min="1000" step="1000"
+    style="background:#1b1f2a;border:1px solid #2d3342;border-radius:8px;color:#e5e7eb;padding:7px 10px;width:160px"/>
+  <button onclick="resetPortfolio()" style="background:#dc2626;border:none;color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600">Reset portfolio</button>
+  <span class="note">wipes positions &amp; trades, restarts with the amount on the left</span>
+</div>
+<script>
+async function resetPortfolio() {{
+  const amt = parseFloat(document.getElementById('reset-amt').value);
+  if (!confirm(`Reset the NSE virtual portfolio to ₹${{amt.toLocaleString()}}? All positions and trade history will be wiped.`)) return;
+  const r = await fetch('/portfolio/reset', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{starting_cash: amt}})}});
+  const d = await r.json();
+  alert(d.ok ? ('Portfolio reset.' + (d.note ? '\\n\\n' + d.note : '')) : d.error);
+  location.reload();
+}}
+</script>"""
+
+
 @app.get("/performance")
 def performance():
-    """Scoreboard: how past flags actually played out. Refreshes outcomes first."""
+    """Scoreboard + NSE virtual portfolio. Refreshes outcomes first."""
     from fastapi.responses import HTMLResponse
     try:
         journal.update_outcomes()
     except Exception:
         pass  # show whatever is already scored even if Yahoo is flaky
-    return HTMLResponse(journal.render_html())
+    html = journal.render_html().replace("</body>", _portfolio_html() + "</body>")
+    return HTMLResponse(html)
 
 
 @app.get("/performance.json")

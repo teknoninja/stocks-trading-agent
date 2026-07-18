@@ -16,14 +16,22 @@ import sys
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Alpaca paper-trading watchlist scan")
+    parser = argparse.ArgumentParser(description="Paper-trading watchlist scan (US via Alpaca, NSE via virtual broker)")
     parser.add_argument("--dry-run", action="store_true", help="decide but don't submit orders")
+    parser.add_argument("--market", choices=["us", "in", "both"], default="both",
+                        help="which market(s) to scan (default: both — each skips when closed)")
     args = parser.parse_args()
 
-    from tradingview_bot.scanner import run_scan
-    result = run_scan(dry_run=args.dry_run)
+    from tradingview_bot.scanner import run_scan, run_virtual_scan
+    statuses = []
+    if args.market in ("us", "both"):
+        print("=== US watchlist (Alpaca paper) ===", flush=True)
+        statuses.append(run_scan(dry_run=args.dry_run)["status"])
+    if args.market in ("in", "both"):
+        print("=== NSE watchlist (virtual broker) ===", flush=True)
+        statuses.append(run_virtual_scan(dry_run=args.dry_run)["status"])
     # non-zero exit only on config problems, so CI marks misconfig red
-    if result["status"] in ("not_configured", "no_watchlist"):
+    if statuses and all(s in ("not_configured", "no_watchlist") for s in statuses):
         sys.exit(1)
 
 

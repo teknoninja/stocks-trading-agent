@@ -58,6 +58,15 @@ Free Alpaca **paper** account (fake money) integration, two ways to use it:
 
 **Setup:** add `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` as repo **secrets**, create the `AUTO_TRADING` **variable** (value `off`), edit `watchlist.txt`, and test with `python run_scanner.py --dry-run`.
 
+### 🇮🇳 NSE virtual paper broker
+
+Alpaca can't trade Indian stocks, so NSE symbols get a **built-in virtual broker**: [watchlist_in.txt](watchlist_in.txt) is scanned during NSE hours (9:15–15:30 IST) by the same workflow, with simulated fills at the latest Yahoo price (whole shares, long-only, same confidence/max-position rules). The portfolio lives in `nse_portfolio.json` **tracked in the repo** — GitHub Actions commits it after each trading run, so state survives with your laptop off.
+
+- **View it:** the `/performance` page shows equity, positions, P&L, and recent trades in ₹.
+- **Reset it:** same page — type a starting amount and click **Reset portfolio**. Syncing the reset to GitHub from the button needs the fine-grained token to also have **Contents: Read and write**; otherwise the reset saves locally and you commit/push `nse_portfolio.json` yourself.
+- Defaults: ₹10,00,000 start, ₹1,00,000 per position (`TV_BOT_START_CASH_INR`, `TV_BOT_NOTIONAL_INR`).
+- Same `AUTO_TRADING` switch gates both markets; `python run_scanner.py --market in --dry-run` tests NSE only.
+
 ### 📓 Flag journal & performance scoreboard
 
 Every fresh flag the server generates is logged to `data/flag_journal.db` (SQLite, gitignored). Once flags are 5/10/20 trading days old, outcomes are fetched automatically and scored (BUY correct if price rose, SELL if it fell).

@@ -203,3 +203,82 @@ def run_scan(dry_run: bool = False) -> dict:
 
     say(f"Done. {len(actions)} action(s).")
     return {"status": "ok", "actions": actions, "log": log}
+
+
+# ---------------- NSE scan via the built-in virtual broker -------------------
+
+WATCHLIST_IN_FILE = os.getenv("TV_BOT_WATCHLIST_IN", "watchlist_in.txt")
+
+
+def run_virtual_scan(dry_run: bool = False) -> dict:
+    """Reconcile the NSE watchlist with the built-in virtual portfolio.
+
+    Same rules as the Alpaca scan (long-only, confidence floor, max positions);
+    fills simulated at the latest Yahoo price, whole shares only. The portfolio
+    JSON lives in the repo — GitHub Actions commits it after each run.
+    """
+    from . import virtual_broker as vb
+
+    log: List[str] = []
+
+    def say(msg: str):
+        print(msg, flush=True)
+        log.append(msg)
+
+    if not vb.nse_market_open():
+        say("NSE market closed — nothing to do.")
+        return {"status": "market_closed", "log": log}
+
+    watchlist = load_watchlist(WATCHLIST_IN_FILE)
+    if not watchlist:
+        say(f"ABORT: NSE watchlist empty/missing ({WATCHLIST_IN_FILE})")
+        return {"status": "no_watchlist", "log": log}
+
+    p = vb.load()
+    say(f"Virtual portfolio: cash ₹{p['cash']:,.0f}, positions: {len(p['positions'])}")
+
+    # drawdown breaker vs starting cash is too blunt; use equity vs starting cash floor
+    actions = []
+    open_count = len(p["positions"])
+    for sym in watchlist:
+        from stocks_agent.technicals import analyze_ticker
+        result = analyze_ticker(sym, include_options=False)
+        if "error" in result:
+            say(f"  {sym}: SKIP ({result['error'][:80]})")
+            continue
+        flag, conf, price = result["flag"], result.get("confidence", 0), result["price"]
+        pos = p["positions"].get(sym)
+        say(f"  {sym}: {flag} conf={conf:.2f} score={result.get('score')} @₹{price}"
+            + (f" | holding {pos['qty']}" if pos else ""))
+
+        if flag == "BUY" and not pos:
+            if conf < MIN_CONF:
+                say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
+            elif open_count >= MAX_POS:
+                say(f"    -> skip buy (max positions {MAX_POS} reached)")
+            elif dry_run:
+                say(f"    -> would BUY ~₹{vb.NOTIONAL:,.0f}")
+            else:
+                trade = vb.buy(p, sym, price)
+                if trade:
+                    open_count += 1
+                    actions.append(trade)
+                    say(f"    -> BOUGHT {trade['qty']} @ ₹{price}")
+                else:
+                    say("    -> skip buy (insufficient cash for one share)")
+        elif flag == "SELL" and pos:
+            if dry_run:
+                say(f"    -> would SELL {pos['qty']}")
+            else:
+                trade = vb.sell_all(p, sym, price)
+                if trade:
+                    open_count -= 1
+                    actions.append(trade)
+                    say(f"    -> SOLD {trade['qty']} @ ₹{price} (pnl ₹{trade['pnl']:,.0f})")
+        time.sleep(1.5)
+
+    if actions and not dry_run:
+        vb.save(p)
+        say(f"Portfolio saved to {vb.PORTFOLIO_FILE}.")
+    say(f"Done. {len(actions)} action(s).")
+    return {"status": "ok", "actions": actions, "log": log}

@@ -14,10 +14,13 @@ on:
   schedule:
     # Every 30 min during US market hours (13:30-20:00 UTC), Mon-Fri.
     - cron: "*/30 13-20 * * 1-5"
+    # Every 30 min during NSE market hours (03:45-10:00 UTC), Mon-Fri.
+    - cron: "*/30 3-10 * * 1-5"
   workflow_dispatch: {}   # manual "Run workflow" button for testing
 
 permissions:
   actions: write          # lets the drawdown breaker flip AUTO_TRADING off
+  contents: write         # lets the run commit the NSE virtual portfolio file
 
 concurrency:
   group: paper-trader
@@ -46,3 +49,14 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python run_scanner.py
+
+      - name: Commit NSE virtual portfolio (if it traded)
+        run: |
+          if [ -n "$(git status --porcelain nse_portfolio.json)" ]; then
+            git config user.name "paper-trader-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add nse_portfolio.json
+            git commit -m "NSE virtual portfolio update [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi

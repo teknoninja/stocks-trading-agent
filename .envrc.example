@@ -18,10 +18,12 @@ export GITHUB_TOKEN='your-github-token'
 export GITHUB_REPO='yourname/stocks-trading-agent'
 
 # Scanner tuning (defaults shown)
-# export TV_BOT_NOTIONAL='1000'   # $ per position
+# export TV_BOT_NOTIONAL='1000'   # $ per position (US / Alpaca)
 # export TV_BOT_MIN_CONF='0.55'   # min flag confidence to buy
 # export TV_BOT_MAX_POS='10'      # max open positions
 # export TV_BOT_MAX_DD='0.03'     # daily drawdown circuit breaker (3%)
+# export TV_BOT_START_CASH_INR='1000000'  # NSE virtual portfolio starting cash
+# export TV_BOT_NOTIONAL_INR='100000'     # ₹ per NSE position
 
 # OpenAI API Key
 export OPENAI_API_KEY='your-openai-api-key-here'
