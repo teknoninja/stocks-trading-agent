@@ -1,11 +1,15 @@
 {
   "currency": "INR",
   "starting_cash": 20000.0,
-  "cash": 17807.0,
+  "cash": 16362.7,
   "positions": {
     "INFY.NS": {
       "qty": 2,
       "avg_price": 1096.5
+    },
+    "ICICIBANK.NS": {
+      "qty": 1,
+      "avg_price": 1444.3
     }
   },
   "trades": [
@@ -22,9 +26,16 @@
       "side": "buy",
       "qty": 1,
       "price": 1096.5
+    },
+    {
+      "ts": "2026-07-19T16:43:43.648084+00:00",
+      "symbol": "ICICIBANK.NS",
+      "side": "buy",
+      "qty": 1,
+      "price": 1444.3
     }
   ],
   "equity_history": [],
   "created_at": "2026-07-18T14:24:38.308209+00:00",
-  "updated_at": "2026-07-18T14:25:11.855607+00:00"
+  "updated_at": "2026-07-19T16:43:43.648983+00:00"
 }
