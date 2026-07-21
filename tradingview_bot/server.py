@@ -389,17 +389,30 @@ def _portfolio_html() -> str:
     def inr(x):
         return f"₹{x:,.2f}"
 
-    pos_rows = "".join(
-        f"""<tr>
+    def _pos_row(r):
+        earned = inr(r["pnl"]) if r["pnl"] > 0 else "—"
+        lost = inr(-r["pnl"]) if r["pnl"] < 0 else "—"
+        return f"""<tr>
           <td><b>{r['symbol'].replace('.NS', '').replace('.BO', '')}</b>
-              <span style='color:#6b7280;font-size:10px'>{'NSE' if r['symbol'].endswith('.NS') else 'BSE'}</span><br>
-              <span class='note'>₹{r['price']:,} · avg ₹{r['avg_price']:,}</span></td>
-          <td style='text-align:right'>{inr(r['value'])}<br>
-              <span style='color:{"#4ade80" if r['pnl'] >= 0 else "#f87171"};font-size:11px'>
-              {"▲" if r['pnl'] >= 0 else "▼"} {inr(abs(r['pnl']))} ({r['pnl_pct']:+}%)</span></td>
-          <td style='text-align:right;color:#9ca3af'>{r['qty']}</td></tr>"""
-        for r in v["positions"]
-    ) or "<tr><td colspan=3 class='note'>No open positions yet — paper trade an NSE stock or let the scanner run.</td></tr>"
+              <span style='color:#6b7280;font-size:10px'>{'NSE' if r['symbol'].endswith('.NS') else 'BSE'}</span></td>
+          <td style='text-align:right;color:#9ca3af'>{r['qty']}</td>
+          <td style='text-align:right'>₹{r['avg_price']:,}</td>
+          <td style='text-align:right'>₹{r['price']:,}<br>
+              <span style='color:{"#4ade80" if r['pnl_pct'] >= 0 else "#f87171"};font-size:10px'>{r['pnl_pct']:+}%</span></td>
+          <td style='text-align:right'>{inr(r['invested'])}</td>
+          <td style='text-align:right'>{inr(r['value'])}</td>
+          <td style='text-align:right;color:#4ade80'>{earned}</td>
+          <td style='text-align:right;color:#f87171'>{lost}</td></tr>"""
+
+    pos_rows = "".join(_pos_row(r) for r in v["positions"]) \
+        or "<tr><td colspan=8 class='note'>No open positions yet — paper trade an NSE stock or let the scanner run.</td></tr>"
+    if v["positions"]:
+        pos_rows += f"""<tr style='border-top:2px solid #3a3f4d;font-weight:700'>
+          <td>TOTAL</td><td></td><td></td><td></td>
+          <td style='text-align:right'>{inr(v['invested_total'])}</td>
+          <td style='text-align:right'>{inr(v['market_value'])}</td>
+          <td style='text-align:right;color:#4ade80'>{inr(v['unrealized_earned']) if v['unrealized_earned'] else '—'}</td>
+          <td style='text-align:right;color:#f87171'>{inr(v['unrealized_lost']) if v['unrealized_lost'] else '—'}</td></tr>"""
 
     import json as _json
     return f"""
@@ -416,10 +429,17 @@ def _portfolio_html() -> str:
   <div style="display:flex;gap:6px;margin:8px 0 6px" id="pf-ranges"></div>
 </div>
 
-<table style="margin-top:0"><tr><th>Asset · price</th><th style="text-align:right">Value · P&amp;L</th><th style="text-align:right">Qty</th></tr>{pos_rows}</table>
+<table style="margin-top:0"><tr>
+  <th>Asset</th><th style="text-align:right">Qty</th><th style="text-align:right">Buy price</th>
+  <th style="text-align:right">Current</th><th style="text-align:right">Invested</th>
+  <th style="text-align:right">Value</th><th style="text-align:right">Cash earned</th>
+  <th style="text-align:right">Cash lost</th></tr>{pos_rows}</table>
 
 <table style="margin-top:-16px">
   <tr><td style="color:#9ca3af">ALL HOLDINGS</td><td style="text-align:right"><b>{inr(v['market_value'])}</b></td></tr>
+  <tr><td style="color:#9ca3af">CASH EARNED (open positions)</td><td style="text-align:right;color:#4ade80"><b>{"▲ " + inr(v['unrealized_earned']) if v['unrealized_earned'] else "—"}</b></td></tr>
+  <tr><td style="color:#9ca3af">CASH LOST (open positions)</td><td style="text-align:right;color:#f87171"><b>{"▼ " + inr(v['unrealized_lost']) if v['unrealized_lost'] else "—"}</b></td></tr>
+  <tr><td style="color:#9ca3af">REALISED P&amp;L (from sold stocks)</td><td style="text-align:right;color:{'#4ade80' if v['realized_pnl'] >= 0 else '#f87171'}"><b>{'▲' if v['realized_pnl'] >= 0 else '▼'} {inr(abs(v['realized_pnl']))}</b></td></tr>
   <tr><td style="color:#9ca3af">TOTAL P&amp;L</td><td style="text-align:right;color:{pnl_color}"><b>{arrow} {inr(abs(pnl))} ({v['total_return_pct']:+}%)</b></td></tr>
   <tr><td style="color:#9ca3af">CASH</td><td style="text-align:right"><b>{inr(v['cash'])}</b></td></tr>
   <tr><td style="color:#9ca3af">TOTAL</td><td style="text-align:right;font-size:15px"><b>{inr(v['equity'])}</b></td></tr>

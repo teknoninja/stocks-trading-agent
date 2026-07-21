@@ -79,6 +79,20 @@ def close_position(symbol: str) -> Optional[dict]:
     return _request("DELETE", f"/v2/positions/{symbol.upper()}")
 
 
+def last_buy_fill_times(limit: int = 200) -> dict:
+    """{symbol: datetime of most recent filled BUY} — entry times for the
+    time-exit rule (positions here are single-entry, so last buy = entry)."""
+    orders = _request("GET", "/v2/orders",
+                      params={"status": "closed", "limit": limit, "direction": "desc"}) or []
+    out = {}
+    for o in orders:
+        if o.get("side") == "buy" and o.get("filled_at"):
+            sym = o["symbol"].upper()
+            if sym not in out:
+                out[sym] = datetime.fromisoformat(o["filled_at"].replace("Z", "+00:00"))
+    return out
+
+
 def daily_bars(symbol: str, years: int = 2) -> pd.DataFrame:
     """Free IEX-feed daily bars — fallback when Yahoo rate-limits the scanner."""
     start = (datetime.now(timezone.utc) - timedelta(days=365 * years)).strftime("%Y-%m-%d")

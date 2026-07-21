@@ -104,6 +104,8 @@ def buy(portfolio: dict, symbol: str, price: float, notional: float = NOTIONAL) 
         return None
     cost = qty * price
     pos = portfolio["positions"].get(symbol, {"qty": 0, "avg_price": 0.0})
+    if pos["qty"] == 0:
+        pos["opened_at"] = _now()  # entry date for the time-exit rule
     total_qty = pos["qty"] + qty
     pos["avg_price"] = (pos["avg_price"] * pos["qty"] + cost) / total_qty
     pos["qty"] = total_qty
@@ -114,33 +116,45 @@ def buy(portfolio: dict, symbol: str, price: float, notional: float = NOTIONAL) 
     return trade
 
 
-def sell_all(portfolio: dict, symbol: str, price: float) -> Optional[dict]:
+def sell_all(portfolio: dict, symbol: str, price: float, reason: str = "manual") -> Optional[dict]:
     pos = portfolio["positions"].pop(symbol, None)
     if not pos or price <= 0:
         return None
     portfolio["cash"] += pos["qty"] * price
     trade = {"ts": _now(), "symbol": symbol, "side": "sell", "qty": pos["qty"],
-             "price": price, "pnl": round((price - pos["avg_price"]) * pos["qty"], 2)}
+             "price": price, "pnl": round((price - pos["avg_price"]) * pos["qty"], 2),
+             "reason": reason}
     portfolio["trades"].append(trade)
     return trade
 
 
 def valuation(portfolio: dict, price_fn: Callable[[str], Optional[float]]) -> dict:
     """Mark-to-market using price_fn(symbol) -> latest price (or None)."""
-    rows, market_value = [], 0.0
+    rows, market_value, invested_total = [], 0.0, 0.0
     for sym, pos in portfolio["positions"].items():
         price = price_fn(sym) or pos["avg_price"]
         value = pos["qty"] * price
+        invested = pos["qty"] * pos["avg_price"]
         market_value += value
+        invested_total += invested
         rows.append({
             "symbol": sym, "qty": pos["qty"], "avg_price": round(pos["avg_price"], 2),
-            "price": round(price, 2), "value": round(value, 2),
+            "price": round(price, 2), "invested": round(invested, 2), "value": round(value, 2),
             "pnl": round((price - pos["avg_price"]) * pos["qty"], 2),
             "pnl_pct": round((price / pos["avg_price"] - 1) * 100, 2) if pos["avg_price"] else 0,
         })
     equity = portfolio["cash"] + market_value
     start = portfolio["starting_cash"] or 1
+    # realized P&L: booked on every sell trade; unrealized split: winners vs losers
+    realized = round(sum(t.get("pnl", 0) or 0 for t in portfolio["trades"]
+                         if t.get("side") == "sell"), 2)
+    earned = round(sum(r["pnl"] for r in rows if r["pnl"] > 0), 2)
+    lost = round(sum(-r["pnl"] for r in rows if r["pnl"] < 0), 2)
     return {
+        "invested_total": round(invested_total, 2),
+        "unrealized_earned": earned,
+        "unrealized_lost": lost,
+        "realized_pnl": realized,
         "currency": portfolio["currency"],
         "starting_cash": portfolio["starting_cash"],
         "cash": round(portfolio["cash"], 2),

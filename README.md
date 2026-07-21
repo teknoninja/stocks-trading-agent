@@ -56,6 +56,8 @@ Free Alpaca **paper** account (fake money) integration, two ways to use it:
 
 **Guardrails:** market-clock check, confidence ≥ 0.55 to buy, max 10 positions, and a daily drawdown circuit breaker (equity −3% vs yesterday → flips `AUTO_TRADING` off and stops). If Yahoo rate-limits GitHub's IPs, the scanner falls back to Alpaca's free IEX daily bars.
 
+**Short-swing exits** (both markets — the backtest showed the engine's edge concentrates in ~5 days): held positions are closed by the first rule that fires — **stop-loss −4%** (thesis failed), **take-profit +5%** (edge banked), **SELL flag** (emergency door), or **time-exit after 7 trading days** (thesis expired, recycle the cash). Tune or disable via `TV_BOT_STOP_LOSS`, `TV_BOT_TAKE_PROFIT`, `TV_BOT_MAX_HOLD_DAYS`. Sell trades record which rule fired (`reason`).
+
 **Setup:** add `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` as repo **secrets**, create the `AUTO_TRADING` **variable** (value `off`), edit `watchlist.txt`, and test with `python run_scanner.py --dry-run`.
 
 ### 🇮🇳 NSE virtual paper broker

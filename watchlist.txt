@@ -1,5 +1,4 @@
 # Symbols the auto-scanner may trade (US-listed, one per line).
-# Lines starting with # are comments. Edit freely and commit.
 AAPL
 MSFT
 NVDA

@@ -19,6 +19,7 @@ Guardrails:
 
 import os
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -30,6 +31,44 @@ MIN_CONF = float(os.getenv("TV_BOT_MIN_CONF", "0.55"))
 MAX_POS = int(os.getenv("TV_BOT_MAX_POS", "10"))
 MAX_DD = float(os.getenv("TV_BOT_MAX_DD", "0.03"))
 WATCHLIST_FILE = os.getenv("TV_BOT_WATCHLIST", "watchlist.txt")
+
+# --- short-swing exit rules (the engine's edge concentrates in ~5 days) ---
+TAKE_PROFIT = float(os.getenv("TV_BOT_TAKE_PROFIT", "0.05"))   # bank at +5%; 0 disables
+STOP_LOSS = float(os.getenv("TV_BOT_STOP_LOSS", "0.04"))       # cut at -4%; 0 disables
+MAX_HOLD_DAYS = int(os.getenv("TV_BOT_MAX_HOLD_DAYS", "7"))    # trading days; 0 disables
+
+
+def _trading_days_between(start, end) -> int:
+    """Approximate trading days = weekdays between two datetimes (holidays ignored)."""
+    from datetime import timedelta
+    if start is None or end <= start:
+        return 0
+    days, cur = 0, start.date()
+    while cur < end.date():
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            days += 1
+    return days
+
+
+def exit_reason(pnl_frac: Optional[float], held_tdays: Optional[int], flag: str) -> Optional[str]:
+    """Why (if at all) a held position should be closed. Priority: risk first.
+
+    - stop_loss:   position down >= STOP_LOSS from entry (thesis failed)
+    - take_profit: position up >= TAKE_PROFIT (the short-horizon edge, banked)
+    - sell_flag:   the engine's technical picture turned bearish (emergency door)
+    - time_exit:   held >= MAX_HOLD_DAYS trading days with none of the above
+    """
+    if pnl_frac is not None:
+        if STOP_LOSS > 0 and pnl_frac <= -STOP_LOSS:
+            return "stop_loss"
+        if TAKE_PROFIT > 0 and pnl_frac >= TAKE_PROFIT:
+            return "take_profit"
+    if flag == "SELL":
+        return "sell_flag"
+    if MAX_HOLD_DAYS > 0 and held_tdays is not None and held_tdays >= MAX_HOLD_DAYS:
+        return "time_exit"
+    return None
 
 
 # ---------------- GitHub AUTO_TRADING variable (the ON/OFF switch) ----------
@@ -166,6 +205,10 @@ def run_scan(dry_run: bool = False) -> dict:
     held: Dict[str, dict] = {p["symbol"].upper(): p for p in alpaca.positions()}
     open_count = len(held)
     say(f"Watchlist: {', '.join(watchlist)} | open positions: {open_count}")
+    try:
+        entry_times = alpaca.last_buy_fill_times() if held else {}
+    except Exception:
+        entry_times = {}
 
     actions = []
     for sym in watchlist:
@@ -179,7 +222,27 @@ def run_scan(dry_run: bool = False) -> dict:
         say(f"  {sym}: {flag} conf={conf:.2f} score={result.get('score')} [{src}]"
             + (f" | holding {pos['qty']}" if pos else ""))
 
-        if flag == "BUY" and not pos:
+        if pos:
+            # short-swing exits: stop-loss / take-profit / SELL flag / time-exit
+            try:
+                pnl_frac = float(pos.get("unrealized_plpc") or 0)
+            except (TypeError, ValueError):
+                pnl_frac = 0.0
+            entry = entry_times.get(sym)
+            held_days = _trading_days_between(entry, datetime.now(timezone.utc)) if entry else None
+            reason = exit_reason(pnl_frac, held_days, flag)
+            if reason:
+                if dry_run:
+                    say(f"    -> would CLOSE {pos['qty']} ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+                else:
+                    alpaca.close_position(sym)
+                    open_count -= 1
+                    actions.append({"symbol": sym, "action": "close", "reason": reason})
+                    say(f"    -> position CLOSED ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+            else:
+                held_txt = f"day {held_days}/{MAX_HOLD_DAYS}" if held_days is not None else "entry date unknown"
+                say(f"    -> holding (pnl {pnl_frac * 100:+.1f}%, {held_txt})")
+        elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
             elif open_count >= MAX_POS:
@@ -191,14 +254,6 @@ def run_scan(dry_run: bool = False) -> dict:
                 open_count += 1
                 actions.append({"symbol": sym, "action": "buy", "order_id": order.get("id")})
                 say(f"    -> BUY ${NOTIONAL:.0f} submitted ({order.get('id', '?')[:8]})")
-        elif flag == "SELL" and pos:
-            if dry_run:
-                say(f"    -> would CLOSE {pos['qty']}")
-            else:
-                alpaca.close_position(sym)
-                open_count -= 1
-                actions.append({"symbol": sym, "action": "close"})
-                say(f"    -> position CLOSED")
         time.sleep(1.5)  # be gentle with the data APIs
 
     say(f"Done. {len(actions)} action(s).")
@@ -252,7 +307,30 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
         say(f"  {sym}: {flag} conf={conf:.2f} score={result.get('score')} @₹{price}"
             + (f" | holding {pos['qty']}" if pos else ""))
 
-        if flag == "BUY" and not pos:
+        if pos:
+            # short-swing exits: stop-loss / take-profit / SELL flag / time-exit
+            pnl_frac = (price / pos["avg_price"] - 1) if pos.get("avg_price") else None
+            opened = pos.get("opened_at")
+            if not opened:  # position predates exit-rule tracking: start the clock now
+                pos["opened_at"] = datetime.now(timezone.utc).isoformat()
+                held_days = 0
+            else:
+                held_days = _trading_days_between(datetime.fromisoformat(opened),
+                                                  datetime.now(timezone.utc))
+            reason = exit_reason(pnl_frac, held_days, flag)
+            pnl_frac = pnl_frac or 0.0
+            if reason:
+                if dry_run:
+                    say(f"    -> would SELL {pos['qty']} ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+                else:
+                    trade = vb.sell_all(p, sym, price, reason=reason)
+                    if trade:
+                        open_count -= 1
+                        actions.append(trade)
+                        say(f"    -> SOLD {trade['qty']} @ ₹{price} ({reason}, pnl ₹{trade['pnl']:,.0f})")
+            else:
+                say(f"    -> holding (pnl {pnl_frac * 100:+.1f}%, day {held_days}/{MAX_HOLD_DAYS})")
+        elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
             elif open_count >= MAX_POS:
@@ -267,15 +345,6 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
                     say(f"    -> BOUGHT {trade['qty']} @ ₹{price}")
                 else:
                     say("    -> skip buy (insufficient cash for one share)")
-        elif flag == "SELL" and pos:
-            if dry_run:
-                say(f"    -> would SELL {pos['qty']}")
-            else:
-                trade = vb.sell_all(p, sym, price)
-                if trade:
-                    open_count -= 1
-                    actions.append(trade)
-                    say(f"    -> SOLD {trade['qty']} @ ₹{price} (pnl ₹{trade['pnl']:,.0f})")
         time.sleep(1.5)
 
     # snapshot equity for the performance chart (positions without a fresh
