@@ -33,9 +33,41 @@ MAX_DD = float(os.getenv("TV_BOT_MAX_DD", "0.03"))
 WATCHLIST_FILE = os.getenv("TV_BOT_WATCHLIST", "watchlist.txt")
 
 # --- short-swing exit rules (the engine's edge concentrates in ~5 days) ---
+# Defaults (used by the NSE virtual scan and as the fallback everywhere).
 TAKE_PROFIT = float(os.getenv("TV_BOT_TAKE_PROFIT", "0.05"))   # bank at +5%; 0 disables
 STOP_LOSS = float(os.getenv("TV_BOT_STOP_LOSS", "0.04"))       # cut at -4%; 0 disables
 MAX_HOLD_DAYS = int(os.getenv("TV_BOT_MAX_HOLD_DAYS", "7"))    # trading days; 0 disables
+
+# US (Alpaca) profile — wide target that lets winners run, PLUS a breakeven stop.
+# Backtest finding: tight stops get chopped by daily noise on US mega-caps; a wide
+# target with a breakeven stop earns more AND stops faded winners from round-tripping
+# to a loss. Once a position's peak gain reaches US_BREAKEVEN, the stop moves to the
+# entry price (exit at ~0% instead of -stop). Set US_BREAKEVEN=0 to disable.
+US_TAKE_PROFIT = float(os.getenv("TV_BOT_TAKE_PROFIT_US", "0.05"))   # bank at +5%
+US_STOP_LOSS = float(os.getenv("TV_BOT_STOP_LOSS_US", "0.04"))       # cut at -4%
+US_MAX_HOLD_DAYS = int(os.getenv("TV_BOT_MAX_HOLD_DAYS_US", str(MAX_HOLD_DAYS)))
+US_BREAKEVEN = float(os.getenv("TV_BOT_BREAKEVEN_US", "0.025"))      # arm breakeven at +2.5%
+
+# --- tiered breakeven floor (applies to BOTH US and NSE) ---
+# Once a position's PEAK gain reaches BREAKEVEN_ARM, the stop moves up to a floor
+# that depends on the symbol's tier in the watchlist:
+#   winner   -> FLOOR_WINNER   (default 0%  = pure breakeven; give room to run to +5%)
+#   mediocre -> FLOOR_MEDIOCRE (default +1% = lock a small profit; don't wait around)
+# Tag a symbol in the watchlist file: "AAPL winner" / "TSLA mediocre".
+BREAKEVEN_ARM = float(os.getenv("TV_BOT_BREAKEVEN_ARM", str(US_BREAKEVEN)))
+FLOOR_WINNER = float(os.getenv("TV_BOT_FLOOR_WINNER", "0.0"))
+FLOOR_MEDIOCRE = float(os.getenv("TV_BOT_FLOOR_MEDIOCRE", "0.01"))
+
+
+def _norm_tier(t) -> str:
+    return "mediocre" if str(t).strip().lower() in ("mediocre", "m", "med") else "winner"
+
+
+def floor_for_tier(tier: str) -> float:
+    return FLOOR_MEDIOCRE if _norm_tier(tier) == "mediocre" else FLOOR_WINNER
+
+
+DEFAULT_TIER = _norm_tier(os.getenv("TV_BOT_DEFAULT_TIER", "winner"))
 
 
 def _trading_days_between(start, end) -> int:
@@ -51,24 +83,63 @@ def _trading_days_between(start, end) -> int:
     return days
 
 
-def exit_reason(pnl_frac: Optional[float], held_tdays: Optional[int], flag: str) -> Optional[str]:
+def exit_reason(pnl_frac: Optional[float], held_tdays: Optional[int], flag: str,
+                take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
+                max_hold_days: Optional[int] = None,
+                breakeven_trigger: Optional[float] = None,
+                peak_frac: Optional[float] = None,
+                floor: float = 0.0) -> Optional[str]:
     """Why (if at all) a held position should be closed. Priority: risk first.
 
-    - stop_loss:   position down >= STOP_LOSS from entry (thesis failed)
-    - take_profit: position up >= TAKE_PROFIT (the short-horizon edge, banked)
+    Thresholds default to the module-level (NSE/default) values; the US scan
+    passes its own set + a breakeven trigger. Priority order:
+    - breakeven:   position was up >= breakeven_trigger (peak_frac) then fell back
+                   to entry or below — lock in ~0% instead of riding to the stop
+    - stop_loss:   position down >= stop_loss from entry (thesis failed)
+    - take_profit: position up >= take_profit (the short-horizon edge, banked)
     - sell_flag:   the engine's technical picture turned bearish (emergency door)
-    - time_exit:   held >= MAX_HOLD_DAYS trading days with none of the above
+    - time_exit:   held >= max_hold_days trading days with none of the above
     """
+    tp = TAKE_PROFIT if take_profit is None else take_profit
+    sl = STOP_LOSS if stop_loss is None else stop_loss
+    mhd = MAX_HOLD_DAYS if max_hold_days is None else max_hold_days
     if pnl_frac is not None:
-        if STOP_LOSS > 0 and pnl_frac <= -STOP_LOSS:
+        # breakeven / profit-lock: armed once the peak gain reached the trigger;
+        # fires when price has since faded to the tier's floor or below. floor=0
+        # is pure breakeven (winner tier); floor>0 locks a small profit (mediocre).
+        if (breakeven_trigger and peak_frac is not None
+                and peak_frac >= breakeven_trigger and pnl_frac <= floor):
+            return "breakeven" if floor <= 0 else "profit_lock"
+        if sl > 0 and pnl_frac <= -sl:
             return "stop_loss"
-        if TAKE_PROFIT > 0 and pnl_frac >= TAKE_PROFIT:
+        if tp > 0 and pnl_frac >= tp:
             return "take_profit"
     if flag == "SELL":
         return "sell_flag"
-    if MAX_HOLD_DAYS > 0 and held_tdays is not None and held_tdays >= MAX_HOLD_DAYS:
+    if mhd > 0 and held_tdays is not None and held_tdays >= mhd:
         return "time_exit"
     return None
+
+
+def _peak_gain_since(symbol: str, entry_price: Optional[float], entry_dt) -> Optional[float]:
+    """Highest intraday gain fraction reached since entry — arms the breakeven
+    stop. Derived from daily bars, so it needs no stored state. None if unknown
+    (breakeven simply won't arm, which is safe)."""
+    if not entry_price or entry_dt is None:
+        return None
+    try:
+        import pandas as pd
+        from stocks_agent.technicals.data import _clean, _history
+        df = _clean(_history(symbol, "3mo", "1d"))
+        if df.empty:
+            return None
+        ts = pd.Timestamp(entry_dt)
+        highs = df.loc[df.index >= ts, "High"] if df.index.tz is not None else df["High"].tail(15)
+        if highs.empty:
+            highs = df["High"].tail(15)
+        return float(highs.max()) / entry_price - 1
+    except Exception:
+        return None
 
 
 # ---------------- GitHub AUTO_TRADING variable (the ON/OFF switch) ----------
@@ -153,14 +224,25 @@ def analyze_with_fallback(symbol: str) -> dict:
 # ---------------- the scan ----------------------------------------------------
 
 def load_watchlist(path: str = WATCHLIST_FILE) -> List[str]:
+    """Symbols only (first token per line) — tolerant of an optional tier tag."""
+    return [sym for sym, _ in load_watchlist_tiered(path)]
+
+
+def load_watchlist_tiered(path: str = WATCHLIST_FILE):
+    """[(symbol, tier)] — a line is 'SYMBOL' or 'SYMBOL winner|mediocre'.
+    Untagged symbols get DEFAULT_TIER. Tier decides the breakeven floor."""
     if not os.path.exists(path):
         return []
     out = []
     with open(path) as f:
         for line in f:
-            sym = line.split("#")[0].strip().upper()
-            if sym:
-                out.append(sym)
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            sym = parts[0].upper()
+            tier = _norm_tier(parts[1]) if len(parts) > 1 else DEFAULT_TIER
+            out.append((sym, tier))
     return out
 
 
@@ -197,7 +279,8 @@ def run_scan(dry_run: bool = False) -> dict:
             say("WARNING: could not flip AUTO_TRADING — no GitHub token/repo configured.")
         return {"status": "circuit_breaker", "log": log}
 
-    watchlist = load_watchlist()
+    tier_map = dict(load_watchlist_tiered())
+    watchlist = list(tier_map)
     if not watchlist:
         say(f"ABORT: watchlist empty/missing ({WATCHLIST_FILE})")
         return {"status": "no_watchlist", "log": log}
@@ -230,18 +313,28 @@ def run_scan(dry_run: bool = False) -> dict:
                 pnl_frac = 0.0
             entry = entry_times.get(sym)
             held_days = _trading_days_between(entry, datetime.now(timezone.utc)) if entry else None
-            reason = exit_reason(pnl_frac, held_days, flag)
+            try:
+                entry_px = float(pos.get("avg_entry_price") or 0) or None
+            except (TypeError, ValueError):
+                entry_px = None
+            tier = tier_map.get(sym, DEFAULT_TIER)
+            floor = floor_for_tier(tier)
+            peak = _peak_gain_since(sym, entry_px, entry) if BREAKEVEN_ARM else None
+            reason = exit_reason(pnl_frac, held_days, flag,
+                                 take_profit=US_TAKE_PROFIT, stop_loss=US_STOP_LOSS,
+                                 max_hold_days=US_MAX_HOLD_DAYS,
+                                 breakeven_trigger=BREAKEVEN_ARM, peak_frac=peak, floor=floor)
             if reason:
                 if dry_run:
-                    say(f"    -> would CLOSE {pos['qty']} ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+                    say(f"    -> would CLOSE {pos['qty']} ({reason}, {tier}, pnl {pnl_frac * 100:+.1f}%)")
                 else:
                     alpaca.close_position(sym)
                     open_count -= 1
-                    actions.append({"symbol": sym, "action": "close", "reason": reason})
-                    say(f"    -> position CLOSED ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+                    actions.append({"symbol": sym, "action": "close", "reason": reason, "tier": tier})
+                    say(f"    -> position CLOSED ({reason}, {tier}, pnl {pnl_frac * 100:+.1f}%)")
             else:
                 held_txt = f"day {held_days}/{MAX_HOLD_DAYS}" if held_days is not None else "entry date unknown"
-                say(f"    -> holding (pnl {pnl_frac * 100:+.1f}%, {held_txt})")
+                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, {held_txt})")
         elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
@@ -250,10 +343,11 @@ def run_scan(dry_run: bool = False) -> dict:
             elif dry_run:
                 say(f"    -> would BUY ${NOTIONAL:.0f}")
             else:
-                order = alpaca.buy_notional(sym, NOTIONAL)
+                tier = tier_map.get(sym, DEFAULT_TIER)
+                order = alpaca.buy_notional(sym, NOTIONAL, tier=tier)
                 open_count += 1
-                actions.append({"symbol": sym, "action": "buy", "order_id": order.get("id")})
-                say(f"    -> BUY ${NOTIONAL:.0f} submitted ({order.get('id', '?')[:8]})")
+                actions.append({"symbol": sym, "action": "buy", "order_id": order.get("id"), "tier": tier})
+                say(f"    -> BUY ${NOTIONAL:.0f} [{tier}] submitted ({order.get('id', '?')[:8]})")
         time.sleep(1.5)  # be gentle with the data APIs
 
     say(f"Done. {len(actions)} action(s).")
@@ -284,7 +378,8 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
         say("NSE market closed — nothing to do.")
         return {"status": "market_closed", "log": log}
 
-    watchlist = load_watchlist(WATCHLIST_IN_FILE)
+    tier_map = dict(load_watchlist_tiered(WATCHLIST_IN_FILE))
+    watchlist = list(tier_map)
     if not watchlist:
         say(f"ABORT: NSE watchlist empty/missing ({WATCHLIST_IN_FILE})")
         return {"status": "no_watchlist", "log": log}
@@ -317,19 +412,24 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
             else:
                 held_days = _trading_days_between(datetime.fromisoformat(opened),
                                                   datetime.now(timezone.utc))
-            reason = exit_reason(pnl_frac, held_days, flag)
+            tier = tier_map.get(sym, DEFAULT_TIER)
+            floor = floor_for_tier(tier)
+            peak = _peak_gain_since(sym, pos.get("avg_price"),
+                                    datetime.fromisoformat(pos["opened_at"])) if BREAKEVEN_ARM else None
+            reason = exit_reason(pnl_frac, held_days, flag,
+                                 breakeven_trigger=BREAKEVEN_ARM, peak_frac=peak, floor=floor)
             pnl_frac = pnl_frac or 0.0
             if reason:
                 if dry_run:
-                    say(f"    -> would SELL {pos['qty']} ({reason}, pnl {pnl_frac * 100:+.1f}%)")
+                    say(f"    -> would SELL {pos['qty']} ({reason}, {tier}, pnl {pnl_frac * 100:+.1f}%)")
                 else:
-                    trade = vb.sell_all(p, sym, price, reason=reason)
+                    trade = vb.sell_all(p, sym, price, reason=reason, tier=tier)
                     if trade:
                         open_count -= 1
                         actions.append(trade)
-                        say(f"    -> SOLD {trade['qty']} @ ₹{price} ({reason}, pnl ₹{trade['pnl']:,.0f})")
+                        say(f"    -> SOLD {trade['qty']} @ ₹{price} ({reason}, {tier}, pnl ₹{trade['pnl']:,.0f})")
             else:
-                say(f"    -> holding (pnl {pnl_frac * 100:+.1f}%, day {held_days}/{MAX_HOLD_DAYS})")
+                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, day {held_days}/{MAX_HOLD_DAYS})")
         elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")

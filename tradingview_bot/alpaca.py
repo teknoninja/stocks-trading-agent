@@ -61,16 +61,21 @@ def tradable(symbol: str) -> bool:
     return bool(asset and asset.get("tradable"))
 
 
-def buy_notional(symbol: str, notional: float) -> dict:
-    """Market-buy a fixed dollar amount (fractional shares allowed)."""
+def buy_notional(symbol: str, notional: float, tier: str = "") -> dict:
+    """Market-buy a fixed dollar amount (fractional shares allowed).
+
+    `tier` (winner/mediocre) is encoded into the client_order_id as a single
+    letter (W/M) so the exit tier is recoverable from Alpaca order history when
+    comparing which floor made more money."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    tag = (tier[:1].upper() + "-") if tier else ""
     return _request("POST", "/v2/orders", json={
         "symbol": symbol.upper(),
         "notional": str(round(notional, 2)),
         "side": "buy",
         "type": "market",
         "time_in_force": "day",
-        "client_order_id": f"{ORDER_PREFIX}-{symbol.upper()}-{stamp}",
+        "client_order_id": f"{ORDER_PREFIX}-{tag}{symbol.upper()}-{stamp}",
     })
 
 

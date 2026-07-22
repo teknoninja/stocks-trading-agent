@@ -1,0 +1,329 @@
+<style>
+  :root {
+    --bg: #f4f7fb; --surface: #ffffff; --surface-2: #eef2f8;
+    --ink: #14203a; --ink-2: #4a5a76; --ink-3: #8595b0;
+    --line: #d6deec; --line-2: #c2cddf;
+    --accent: #2563eb; --accent-soft: #dbe6fd;
+    --buy: #16a34a; --buy-soft: #dcf3e4;
+    --sell: #dc2626; --sell-soft: #fbe0e0;
+    --hold: #c67c10; --hold-soft: #f7ecd6;
+    --cloud: #7c3aed; --cloud-soft: #ebe0fb;
+    --data: #0e7490; --data-soft: #d5eef3;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1524; --surface: #16203400; --surface: #162034; --surface-2: #1c2942;
+      --ink: #e7edf8; --ink-2: #9fb0cc; --ink-3: #64748b;
+      --line: #26324c; --line-2: #33415f;
+      --accent: #5b91f5; --accent-soft: #1a2c4d;
+      --buy: #34d17f; --buy-soft: #123020;
+      --sell: #f0656a; --sell-soft: #34161a;
+      --hold: #e0a636; --hold-soft: #33280f;
+      --cloud: #a982f0; --cloud-soft: #241a3d;
+      --data: #3cbcd4; --data-soft: #0f2a33;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1524; --surface: #162034; --surface-2: #1c2942;
+    --ink: #e7edf8; --ink-2: #9fb0cc; --ink-3: #64748b;
+    --line: #26324c; --line-2: #33415f;
+    --accent: #5b91f5; --accent-soft: #1a2c4d;
+    --buy: #34d17f; --buy-soft: #123020;
+    --sell: #f0656a; --sell-soft: #34161a;
+    --hold: #e0a636; --hold-soft: #33280f;
+    --cloud: #a982f0; --cloud-soft: #241a3d;
+    --data: #3cbcd4; --data-soft: #0f2a33;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f7fb; --surface: #ffffff; --surface-2: #eef2f8;
+    --ink: #14203a; --ink-2: #4a5a76; --ink-3: #8595b0;
+    --line: #d6deec; --line-2: #c2cddf;
+    --accent: #2563eb; --accent-soft: #dbe6fd;
+    --buy: #16a34a; --buy-soft: #dcf3e4;
+    --sell: #dc2626; --sell-soft: #fbe0e0;
+    --hold: #c67c10; --hold-soft: #f7ecd6;
+    --cloud: #7c3aed; --cloud-soft: #ebe0fb;
+    --data: #0e7490; --data-soft: #d5eef3;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+         line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 28px 80px; }
+
+  header.hero { margin-bottom: 40px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+             color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(28px, 4.5vw, 44px); line-height: 1.05; margin: 0 0 14px; letter-spacing: -.02em;
+       text-wrap: balance; font-weight: 800; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 64ch; margin: 0; }
+  .lede code { font-family: var(--mono); font-size: .88em; color: var(--ink); background: var(--surface-2);
+               padding: 1px 6px; border-radius: 5px; }
+
+  h2 { font-size: 13px; font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase;
+       color: var(--ink-3); margin: 54px 0 18px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .sub { color: var(--ink-2); font-size: 14px; margin: -8px 0 22px; max-width: 70ch; }
+
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 22px; font-size: 12.5px;
+            font-family: var(--mono); color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+  /* architecture stack */
+  .stack { display: flex; flex-direction: column; gap: 0; }
+  .layer { display: grid; grid-template-columns: 116px 1fr; gap: 18px; align-items: center;
+           padding: 16px 0; }
+  .layer + .layer { border-top: 1px dashed var(--line); }
+  .layer-label { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase;
+                 letter-spacing: .08em; color: var(--ink-3); text-align: right; line-height: 1.3; }
+  .nodes { display: flex; flex-wrap: wrap; gap: 10px; }
+  .node { font-family: var(--mono); font-size: 13px; padding: 9px 13px; border-radius: 9px;
+          background: var(--surface); border: 1px solid var(--line-2); color: var(--ink);
+          display: flex; flex-direction: column; gap: 2px; transition: transform .15s, box-shadow .15s, border-color .15s;
+          cursor: default; }
+  .node small { font-family: var(--sans); font-size: 10.5px; color: var(--ink-3); letter-spacing: .01em; }
+  .node:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.12); border-color: var(--accent); }
+  .node.brain { border-color: var(--accent); background: var(--accent-soft); }
+  .node.data { border-color: var(--data); background: var(--data-soft); }
+  .node.cloud { border-color: var(--cloud); background: var(--cloud-soft); }
+  .flowdown { display: flex; justify-content: center; color: var(--ink-3); font-size: 15px; padding: 2px 0; }
+
+  /* flow sequences */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 8px 0 4px;
+          background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .flow .step { flex: 1 1 128px; min-width: 128px; background: var(--surface-2); border-radius: 9px;
+                padding: 11px 12px; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px;
+                border-left: 3px solid var(--line-2); }
+  .flow .step b { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+  .flow .step.acc { border-left-color: var(--accent); }
+  .flow .step.buy { border-left-color: var(--buy); }
+  .flow .step.cloud { border-left-color: var(--cloud); }
+  .flow .step.warn { border-left-color: var(--hold); }
+  .arr { align-self: center; color: var(--ink-3); font-size: 16px; flex: none; }
+  .flow-note { font-size: 12.5px; color: var(--ink-2); margin: 6px 2px 0; }
+
+  /* timeline */
+  .tl { display: flex; flex-direction: column; gap: 0; counter-reset: tl;
+        border-left: 2px solid var(--line-2); margin-left: 8px; }
+  .tl li { list-style: none; counter-increment: tl; position: relative; padding: 0 0 20px 30px; }
+  .tl li::before { content: counter(tl); position: absolute; left: -15px; top: -2px; width: 27px; height: 27px;
+       background: var(--accent); color: #fff; border-radius: 50%; font-family: var(--mono); font-size: 12px;
+       font-weight: 700; display: grid; place-items: center; border: 3px solid var(--bg); }
+  .tl li.buy::before { background: var(--buy); }
+  .tl li.exit::before { background: var(--sell); }
+  .tl h4 { margin: 0 0 3px; font-size: 14px; }
+  .tl p { margin: 0; font-size: 13px; color: var(--ink-2); }
+  .tl code, .flow code, table code { font-family: var(--mono); font-size: .86em; background: var(--surface-2);
+       padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  .val { font-family: var(--mono); color: var(--buy); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--ink-3); }
+  td:first-child { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } .layer { grid-template-columns: 1fr; gap: 8px; }
+       .layer-label { text-align: left; } }
+
+  footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line);
+           font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+
+  @media (prefers-reduced-motion: reduce) { .node { transition: none; } }
+  .reveal { opacity: 0; transform: translateY(10px); animation: rise .5s ease forwards; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; animation: none; } }
+</style>
+
+<div class="wrap">
+  <header class="hero reveal">
+    <p class="eyebrow">System Design · AI Stock Flag Bot</p>
+    <h1>How a stock becomes a flag becomes a trade</h1>
+    <p class="lede">A free-tier AI trading assistant. Deterministic maths make the <strong>BUY / SELL / HOLD</strong>
+    decision; an LLM only explains it. The same engine serves a live browser sidebar and an autonomous
+    cloud scanner. Follow the colour of each node to see the job it does.</p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--ink-3)"></i> UI / browser</span>
+      <span><i class="dot" style="background:var(--accent)"></i> Brain (server + engine)</span>
+      <span><i class="dot" style="background:var(--data)"></i> External data / API</span>
+      <span><i class="dot" style="background:var(--cloud)"></i> Cloud automation</span>
+      <span><i class="dot" style="background:var(--buy)"></i> Buy</span>
+      <span><i class="dot" style="background:var(--sell)"></i> Sell</span>
+      <span><i class="dot" style="background:var(--hold)"></i> Hold</span>
+    </div>
+  </header>
+
+  <h2>1 · The layered architecture</h2>
+  <p class="sub">Top to bottom is the request path. Each layer only talks to its neighbours; the cloud
+  scanner (right, purple) is a second entry point that reuses the very same brain.</p>
+
+  <div class="stack">
+    <div class="layer">
+      <div class="layer-label">You + charts</div>
+      <div class="nodes">
+        <div class="node">TradingView<small>charts you browse</small></div>
+      </div>
+    </div>
+    <div class="flowdown">↑↓ &nbsp; symbol you're viewing</div>
+    <div class="layer">
+      <div class="layer-label">UI layer</div>
+      <div class="nodes">
+        <div class="node">content.js<small>sidebar UI, symbol detect, buttons</small></div>
+        <div class="node">background.js<small>service worker · proxies API calls</small></div>
+      </div>
+    </div>
+    <div class="flowdown">↑↓ &nbsp; HTTP · <code style="font-family:var(--mono);font-size:12px">127.0.0.1:8765</code></div>
+    <div class="layer">
+      <div class="layer-label">Brain</div>
+      <div class="nodes">
+        <div class="node brain">server.py<small>FastAPI · /analyze /ask /papertrade</small></div>
+        <div class="node brain">engine.py<small>runs 17 strategies × 4 timeframes</small></div>
+        <div class="node brain">scoring.py<small>weighted vote → flag + confidence</small></div>
+        <div class="node brain">journal.py<small>logs every flag, scores outcomes</small></div>
+      </div>
+    </div>
+    <div class="flowdown">↓ reads &nbsp;·&nbsp; ↑ writes</div>
+    <div class="layer">
+      <div class="layer-label">External</div>
+      <div class="nodes">
+        <div class="node data">Yahoo Finance<small>OHLCV price candles</small></div>
+        <div class="node data">Gemini API<small>grounded chat answers</small></div>
+        <div class="node data">Alpaca<small>US paper account</small></div>
+        <div class="node data">GitHub repo<small>NSE portfolio · watchlists · switch</small></div>
+      </div>
+    </div>
+    <div class="flowdown">↑ &nbsp; runs the same brain on a schedule</div>
+    <div class="layer">
+      <div class="layer-label">Automation</div>
+      <div class="nodes">
+        <div class="node cloud">GitHub Actions<small>run_scanner.py every 30 min · laptop can be OFF</small></div>
+        <div class="node cloud">scanner.py<small>reconcile flags ↔ positions + exits</small></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>2 · Three data flows</h2>
+
+  <p class="sub"><strong>Flow A — you open a stock.</strong> The sidebar follows your navigation and paints a flag.</p>
+  <div class="flow">
+    <div class="step">Open <code>NSE:RELIANCE</code><b>content.js</b></div>
+    <span class="arr">→</span>
+    <div class="step">detect symbol, poll 1.5s<b>detectSymbol()</b></div>
+    <span class="arr">→</span>
+    <div class="step acc">GET /analyze<b>server.py</b></div>
+    <span class="arr">→</span>
+    <div class="step">fetch 1W/1D/4H/1H<b>data.py</b></div>
+    <span class="arr">→</span>
+    <div class="step acc">17 strategies vote<b>engine + scoring</b></div>
+    <span class="arr">→</span>
+    <div class="step buy">paint BUY badge + reasons<b>sidebar</b></div>
+  </div>
+
+  <p class="sub" style="margin-top:26px"><strong>Flow B — you ask a question.</strong> The LLM explains, grounded on the computed evidence — never inventing the decision.</p>
+  <div class="flow">
+    <div class="step">"why this flag?"<b>chat box</b></div>
+    <span class="arr">→</span>
+    <div class="step acc">POST /ask<b>server.py</b></div>
+    <span class="arr">→</span>
+    <div class="step">compact evidence JSON<b>signals + reasons</b></div>
+    <span class="arr">→</span>
+    <div class="step data">Gemini (model ladder)<b>429/503 → next model</b></div>
+    <span class="arr">→</span>
+    <div class="step">grounded answer<b>or rule-based fallback</b></div>
+  </div>
+
+  <p class="sub" style="margin-top:26px"><strong>Flow C — autonomous trading, laptop off.</strong> Guardrails run <em>before</em> any position is touched.</p>
+  <div class="flow">
+    <div class="step cloud">cron every 30 min<b>GitHub Actions</b></div>
+    <span class="arr">→</span>
+    <div class="step warn">gate: AUTO_TRADING == "on"?<b>skip = $0</b></div>
+    <span class="arr">→</span>
+    <div class="step warn">market open? drawdown &lt; 3%?<b>guardrails</b></div>
+    <span class="arr">→</span>
+    <div class="step acc">for each watchlist symbol<b>compute flag</b></div>
+    <span class="arr">→</span>
+    <div class="step buy">reconcile vs positions<b>buy / hold / exit</b></div>
+    <span class="arr">→</span>
+    <div class="step data">Alpaca / virtual broker<b>commit to repo</b></div>
+  </div>
+  <p class="flow-note">Exit priority per held position: <span style="color:var(--sell)">stop-loss −4%</span> ›
+  <span style="color:var(--buy)">take-profit +5%</span> › <span style="color:var(--hold)">SELL flag</span> ›
+  <span style="color:var(--ink-2)">time-exit 7 days</span> › else hold.</p>
+
+  <h2>3 · The life of one trade</h2>
+  <p class="sub">A single RELIANCE position traced through every layer — the exact value at each hop.</p>
+  <ol class="tl">
+    <li><h4>You open NSE:RELIANCE</h4><p><code>detectSymbol()</code> returns the symbol; the sidebar calls <code>/analyze</code> via the background worker.</p></li>
+    <li><h4>Resolve &amp; fetch</h4><p><code>data.py</code> maps it to <code>RELIANCE.NS</code>, fetches four timeframes. Current price <span class="val" style="color:var(--ink)">₹1,327</span>.</p></li>
+    <li><h4>Strategies vote</h4><p>Weekly + daily structure up, golden cross, bullish BOS — outweigh one weekly RSI divergence.</p></li>
+    <li><h4>Aggregate → flag</h4><p><code>scoring.py</code>: score <span class="val">+0.28</span> ≥ 0.22 → <strong style="color:var(--buy)">BUY</strong>, confidence <span class="val">62%</span>.</p></li>
+    <li class="buy"><h4>Scanner buys</h4><p>Confidence ≥ 0.55, not held, room free → <code>virtual_broker.buy()</code> takes <strong>1 share @ ₹1,327</strong>, stamps <code>opened_at</code>.</p></li>
+    <li><h4>Holds across days</h4><p>Day 2: +1.0%, day 1/7 → hold. Day 4: −0.5% → hold. Log: <code>holding (pnl +1.0%, day 1/7)</code>.</p></li>
+    <li class="exit"><h4>Take-profit fires</h4><p>Day 6 hits ₹1,395 → pnl <span class="val">+5.1%</span> ≥ 5% → <code>exit_reason</code> returns <code>take_profit</code>. Sold, booking <span class="val">₹68</span>.</p></li>
+    <li><h4>Dashboard updates</h4><p><code>/performance</code> counts ₹68 in <code>realized_pnl</code>; the equity curve rises. Zero manual steps after step 5.</p></li>
+  </ol>
+
+  <h2>4 · Where state lives</h2>
+  <p class="sub">The scanner keeps no memory between runs — it re-derives everything from two sources of truth it can always reach. That is why the identical code runs on your laptop or a throwaway cloud machine.</p>
+  <table>
+    <thead><tr><th>Data</th><th>Lives where</th><th>Why there</th></tr></thead>
+    <tbody>
+      <tr><td>US positions / cash / P&amp;L</td><td>Alpaca servers</td><td>A real (simulated) brokerage account — survives everything</td></tr>
+      <tr><td>NSE portfolio + equity history</td><td>nse_portfolio.json <em>in the git repo</em></td><td>Cloud runs check out the repo, trade, commit it back — "GitHub as a tiny database"</td></tr>
+      <tr><td>Watchlists</td><td>watchlist.txt / _in.txt in repo</td><td>The scanner's entire universe; the ★ button edits them via the GitHub API</td></tr>
+      <tr><td>ON/OFF switch</td><td>GitHub repo variable AUTO_TRADING</td><td>Must be readable by cloud runs when the laptop is off</td></tr>
+      <tr><td>Flag journal + outcomes</td><td>SQLite (local)</td><td>Scoreboard only — losing it loses no money state</td></tr>
+      <tr><td>Secrets (API keys)</td><td>.envrc + GitHub encrypted secrets</td><td>Never in code, never committed</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5 · The 17 strategies feeding the vote</h2>
+  <div class="grid2">
+    <table>
+      <thead><tr><th>Strategy</th><th>Wt</th></tr></thead>
+      <tbody>
+        <tr><td>Market structure (HH/HL)</td><td>1.5</td></tr>
+        <tr><td>Multi-timeframe alignment</td><td>1.5</td></tr>
+        <tr><td>BOS / CHOCH break</td><td>1.2</td></tr>
+        <tr><td>Trend following (EMA+cross)</td><td>1.2</td></tr>
+        <tr><td>Supply / demand zones</td><td>1.0</td></tr>
+        <tr><td>RSI divergence</td><td>1.0</td></tr>
+        <tr><td>MACD divergence</td><td>1.0</td></tr>
+        <tr><td>Liquidity sweeps</td><td>0.9</td></tr>
+      </tbody>
+    </table>
+    <table>
+      <thead><tr><th>Strategy</th><th>Wt</th></tr></thead>
+      <tbody>
+        <tr><td>Order blocks</td><td>0.8</td></tr>
+        <tr><td>Volume profile (VPOC)</td><td>0.8</td></tr>
+        <tr><td>Wyckoff phases</td><td>0.8</td></tr>
+        <tr><td>Mean reversion (z-score)</td><td>0.8</td></tr>
+        <tr><td>Breakout (Donchian)</td><td>0.8</td></tr>
+        <tr><td>Anchored VWAP</td><td>0.7</td></tr>
+        <tr><td>Harmonic patterns</td><td>0.6</td></tr>
+        <tr><td>Options positioning</td><td>0.6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="flow-note">Plus Elliott-wave heuristic (0.4). Each emits <code>direction × strength × weight</code>;
+  the normalised sum in [−1, +1] crosses ±0.22 to become the flag. Higher timeframes carry more weight
+  (1W ×1.3 → 1H ×0.6).</p>
+
+  <footer>
+    Stock Flag Bot · system design reference · educational project, not financial advice ·
+    stack: Python · FastAPI · pandas · Gemini · Alpaca · Chrome MV3 · GitHub Actions · SQLite
+  </footer>
+</div>
+
+<script>
+  // gentle staggered reveal on load; skipped under reduced-motion via CSS
+  document.querySelectorAll('h2, .flow, .stack, .tl, table').forEach((el, i) => {
+    el.classList.add('reveal');
+    el.style.animationDelay = Math.min(i * 0.04, 0.4) + 's';
+  });
+</script>

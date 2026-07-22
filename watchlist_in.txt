@@ -1,9 +1,9 @@
 # Indian (NSE) symbols the virtual paper broker may trade — Yahoo .NS form.
 RELIANCE.NS
-HDFCBANK.NS
 ICICIBANK.NS
 SBIN.NS
 ITC.NS
 TATAMOTORS.NS
 LT.NS
 BHARTIARTL.NS
+HDFCBANK.NS mediocre

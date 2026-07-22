@@ -116,7 +116,8 @@ def buy(portfolio: dict, symbol: str, price: float, notional: float = NOTIONAL) 
     return trade
 
 
-def sell_all(portfolio: dict, symbol: str, price: float, reason: str = "manual") -> Optional[dict]:
+def sell_all(portfolio: dict, symbol: str, price: float, reason: str = "manual",
+             tier: str = "") -> Optional[dict]:
     pos = portfolio["positions"].pop(symbol, None)
     if not pos or price <= 0:
         return None
@@ -124,6 +125,8 @@ def sell_all(portfolio: dict, symbol: str, price: float, reason: str = "manual")
     trade = {"ts": _now(), "symbol": symbol, "side": "sell", "qty": pos["qty"],
              "price": price, "pnl": round((price - pos["avg_price"]) * pos["qty"], 2),
              "reason": reason}
+    if tier:
+        trade["tier"] = tier  # for journal analysis: which floor made more money
     portfolio["trades"].append(trade)
     return trade
 

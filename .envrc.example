@@ -26,6 +26,12 @@ export GITHUB_REPO='yourname/stocks-trading-agent'
 # export TV_BOT_TAKE_PROFIT='0.05'   # bank at +5% (0 disables)
 # export TV_BOT_STOP_LOSS='0.04'     # cut at -4% (0 disables)
 # export TV_BOT_MAX_HOLD_DAYS='7'    # time-exit after N trading days (0 disables)
+# Tiered breakeven stop (both markets): once a position peaks at +arm, the stop
+# moves to a floor set by the symbol's watchlist tier (winner/mediocre).
+# export TV_BOT_BREAKEVEN_ARM='0.025'  # peak gain that arms the floor (0 disables)
+# export TV_BOT_FLOOR_WINNER='0.0'     # winner tier floor = breakeven (give room to run)
+# export TV_BOT_FLOOR_MEDIOCRE='0.01'  # mediocre tier floor = lock +1%
+# export TV_BOT_DEFAULT_TIER='winner'  # tier for untagged watchlist symbols
 # export TV_BOT_START_CASH_INR='1000000'  # NSE virtual portfolio starting cash
 # export TV_BOT_NOTIONAL_INR='1000'       # ₹ budget per NSE position (whole shares;
 #                                         #  falls back to 1 share when price > budget)

@@ -56,7 +56,14 @@ Free Alpaca **paper** account (fake money) integration, two ways to use it:
 
 **Guardrails:** market-clock check, confidence ≥ 0.55 to buy, max 10 positions, and a daily drawdown circuit breaker (equity −3% vs yesterday → flips `AUTO_TRADING` off and stops). If Yahoo rate-limits GitHub's IPs, the scanner falls back to Alpaca's free IEX daily bars.
 
-**Short-swing exits** (both markets — the backtest showed the engine's edge concentrates in ~5 days): held positions are closed by the first rule that fires — **stop-loss −4%** (thesis failed), **take-profit +5%** (edge banked), **SELL flag** (emergency door), or **time-exit after 7 trading days** (thesis expired, recycle the cash). Tune or disable via `TV_BOT_STOP_LOSS`, `TV_BOT_TAKE_PROFIT`, `TV_BOT_MAX_HOLD_DAYS`. Sell trades record which rule fired (`reason`).
+**Short-swing exits** (the backtest showed the engine's edge concentrates in ~5 days): held positions are closed by the first rule that fires — **stop-loss −4%**, **take-profit +5%**, **SELL flag**, or **time-exit after 7 trading days**. Tune/disable via `TV_BOT_STOP_LOSS`, `TV_BOT_TAKE_PROFIT`, `TV_BOT_MAX_HOLD_DAYS`. Sell trades record which rule fired (`reason`).
+
+**Tiered breakeven stop** (both markets): once a position's peak gain reaches **+2.5%** (`TV_BOT_BREAKEVEN_ARM`), the stop moves up to a floor set by the symbol's **tier** in the watchlist:
+
+- **winner** → floor **0%** (`TV_BOT_FLOOR_WINNER`) — pure breakeven; gives the stock room to run to the +5% target. A faded winner exits at ~breakeven, not a loss.
+- **mediocre** → floor **+1%** (`TV_BOT_FLOOR_MEDIOCRE`) — locks a small profit; for stocks that pop then fade.
+
+Tag a symbol on the [/watchlists](http://127.0.0.1:8765/watchlists) page (winner/mediocre toggle) or in the file directly: `AAPL winner` / `TSLA mediocre` (untagged = `TV_BOT_DEFAULT_TIER`, default winner). The floor is derived from daily-bar peak-since-entry (no stored state, cloud-safe). Every sell records its `tier` (NSE trade log; encoded in the Alpaca `client_order_id` as `tvbot-W-`/`tvbot-M-`) so you can compare which floor made more money. `TV_BOT_BREAKEVEN_ARM=0` disables the whole mechanism.
 
 **Setup:** add `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` as repo **secrets**, create the `AUTO_TRADING` **variable** (value `off`), edit `watchlist.txt`, and test with `python run_scanner.py --dry-run`.
 

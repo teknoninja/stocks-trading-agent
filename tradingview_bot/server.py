@@ -570,6 +570,11 @@ class WatchRequest(BaseModel):
     symbol: str
 
 
+class TierRequest(BaseModel):
+    symbol: str
+    tier: str
+
+
 @app.get("/watchlist")
 def watchlist_json():
     return watchlists.get_lists()
@@ -585,6 +590,11 @@ def watchlist_toggle(req: WatchRequest):
     return watchlists.toggle(req.symbol)
 
 
+@app.post("/watchlist/tier")
+def watchlist_set_tier(req: TierRequest):
+    return watchlists.set_tier(req.symbol, req.tier)
+
+
 _NAV = ("<div style='margin-bottom:18px;font-size:12px'>"
         "<a href='/performance' style='color:#60a5fa;margin-right:14px'>📊 Performance</a>"
         "<a href='/watchlists' style='color:#60a5fa'>⭐ Watchlists</a></div>")
@@ -595,16 +605,27 @@ def watchlists_page():
     from fastapi.responses import HTMLResponse
     lists = watchlists.get_lists()
 
-    def section(title, market, symbols, note):
+    def _tier_cell(sym, tier):
+        win = tier == "winner"
+        def btn(t, label, on):
+            bg = ("#14351f" if t == "winner" else "#33280f") if on else "none"
+            col = ("#4ade80" if t == "winner" else "#e0a636") if on else "#6b7280"
+            return (f"<button onclick=\"setTier('{sym}','{t}')\" "
+                    f"style='background:{bg};border:1px solid #2d3342;color:{col};border-radius:6px;"
+                    f"padding:2px 9px;cursor:pointer;font-size:11px;margin-left:4px'>{label}</button>")
+        return btn("winner", "winner 0%", win) + btn("mediocre", "mediocre +1%", not win)
+
+    def section(title, market, entries, note):
         rows = "".join(
-            f"<tr><td><b>{s}</b></td>"
-            f"<td style='text-align:right'><button onclick=\"toggleSym('{s}')\" "
+            f"<tr><td><b>{e['symbol']}</b></td>"
+            f"<td style='text-align:right'>{_tier_cell(e['symbol'], e['tier'])}</td>"
+            f"<td style='text-align:right'><button onclick=\"toggleSym('{e['symbol']}')\" "
             f"style='background:none;border:1px solid #3a2d2d;color:#f87171;border-radius:6px;"
             f"padding:2px 10px;cursor:pointer;font-size:11px'>✕ remove</button></td></tr>"
-            for s in symbols
-        ) or "<tr><td colspan=2 class='note'>Empty — add a symbol below or use ★ in the sidebar.</td></tr>"
+            for e in entries
+        ) or "<tr><td colspan=3 class='note'>Empty — add a symbol below or use ★ in the sidebar.</td></tr>"
         return f"""<h2>{title}</h2><p class="note">{note}</p>
-<table style="max-width:420px"><tr><th>Symbol</th><th></th></tr>{rows}</table>"""
+<table style="max-width:520px"><tr><th>Symbol</th><th style="text-align:right">Exit tier</th><th></th></tr>{rows}</table>"""
 
     html = f"""<!doctype html><html><head><meta charset="utf-8"><title>Watchlists</title>
 <style>
@@ -621,6 +642,12 @@ Remove a stock from its watchlist if you don't want the scanner to act on it —
 removing it stops future scanner actions but does <b>not</b> sell anything you already hold.</p>
 <p class="note">Changes sync to the GitHub repo, so the cloud scanner uses your updated lists from its next run.
 Manual Buy/Sell buttons in the sidebar are unaffected by these lists.</p>
+<p style="background:#141b2e;border:1px solid #2d3342;border-radius:8px;padding:10px 12px;font-size:12px;color:#c3c2b7">
+🎯 <b>Exit tier</b> controls how a winning trade is protected once it's up +2.5%:
+<b style="color:#4ade80">winner (0%)</b> moves the stop to breakeven — gives the stock room to run to +5%.
+<b style="color:#e0a636">mediocre (+1%)</b> locks in a small profit instead of waiting.
+Put stocks that tend to run in <span style="color:#4ade80">winner</span>; stocks that pop then fade in
+<span style="color:#e0a636">mediocre</span>. After a few weeks, the trade log's tier tag shows which paid off.</p>
 {section("🇺🇸 US — Alpaca paper account", "us", lists["us"], "Traded during US market hours (9:30 PM–4 AM SGT).")}
 {section("🇮🇳 India — NSE virtual portfolio", "in", lists["in"], "Traded during NSE hours (11:45 AM–6 PM SGT). Yahoo .NS form.")}
 <div style="display:flex;gap:8px;align-items:center;max-width:420px">
@@ -634,6 +661,13 @@ async function toggleSym(s) {{
   const r = await fetch('/watchlist/toggle', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{symbol: s}})}});
   const d = await r.json();
   if (d.error) alert(d.error); else if (d.note) alert(d.action + '\\n\\n' + d.note);
+  location.reload();
+}}
+async function setTier(s, tier) {{
+  const r = await fetch('/watchlist/tier', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{symbol: s, tier}})}});
+  const d = await r.json();
+  if (d.error) {{ alert(d.error); return; }}
+  if (d.note) alert(d.action + '\\n\\n' + d.note);
   location.reload();
 }}
 function addSym() {{

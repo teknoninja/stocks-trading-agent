@@ -64,6 +64,7 @@
           <div style="display:flex;align-items:center;gap:6px">
             <div id="tvb-symbol" style="font-weight:700;font-size:15px">—</div>
             <button id="tvb-watch" title="Add/remove from scanner watchlist" style="background:none;border:none;color:#6b7280;font-size:17px;cursor:pointer;padding:0;line-height:1">☆</button>
+            <button id="tvb-tier" title="Exit tier — click to switch" style="display:none;background:none;border:1px solid #2d3342;border-radius:10px;font-size:10px;padding:1px 8px;cursor:pointer">winner 0%</button>
           </div>
           <div id="tvb-price" style="color:#9ca3af;font-size:12px"></div>
         </div>
@@ -182,14 +183,30 @@
   $("tvb-buy").onclick = () => paperTrade("buy");
   $("tvb-sell").onclick = () => paperTrade("sell");
 
-  // ---------- scanner watchlist toggle ----------
+  // ---------- scanner watchlist toggle + exit tier ----------
+  let watchState = null; // {supported, watching, market, tier}
   function paintWatch(st) {
-    const b = $("tvb-watch");
-    if (!st || !st.supported) { b.textContent = "☆"; b.style.color = "#3a3f4d"; b.title = "Not supported (US/NSE only)"; return; }
+    watchState = st;
+    const b = $("tvb-watch"), tierBtn = $("tvb-tier");
+    if (!st || !st.supported) {
+      b.textContent = "☆"; b.style.color = "#3a3f4d"; b.title = "Not supported (US/NSE only)";
+      tierBtn.style.display = "none"; return;
+    }
     b.textContent = st.watching ? "★" : "☆";
     b.style.color = st.watching ? "#eda100" : "#6b7280";
     b.title = st.watching ? `On the ${st.market.toUpperCase()} scanner watchlist — click to remove`
                           : `Add to the ${st.market.toUpperCase()} scanner watchlist`;
+    // tier pill only makes sense once the stock is on the watchlist
+    if (st.watching && st.tier) {
+      const win = st.tier === "winner";
+      tierBtn.style.display = "";
+      tierBtn.textContent = win ? "winner 0%" : "mediocre +1%";
+      tierBtn.style.color = win ? "#4ade80" : "#e0a636";
+      tierBtn.style.borderColor = win ? "#16653a" : "#5c4611";
+      tierBtn.title = `Exit tier: ${st.tier}. Click to switch to ${win ? "mediocre (+1% floor)" : "winner (breakeven)"}.`;
+    } else {
+      tierBtn.style.display = "none";
+    }
   }
   function refreshWatch(sym) {
     api(`/watchlist/status?symbol=${encodeURIComponent(sym)}`).then(paintWatch).catch(() => paintWatch(null));
@@ -199,9 +216,22 @@
     try {
       const d = await api("/watchlist/toggle", { symbol: currentSymbol });
       if (d.error) { addMsg(`⚠️ ${d.error}`, "bot"); return; }
-      paintWatch({ supported: true, watching: d.watching, market: d.market });
+      paintWatch({ supported: true, watching: d.watching, market: d.market, tier: d.tier });
       addMsg(`${d.watching ? "⭐" : "☆"} ${d.action}${d.note ? " — " + d.note : ""}. ` +
         (d.watching ? "The auto-scanner will now trade it when Auto is ON." : "The auto-scanner will ignore it now."), "bot");
+    } catch (e) { addMsg("Server unreachable.", "bot"); }
+  };
+  $("tvb-tier").onclick = async () => {
+    if (!currentSymbol || !watchState || !watchState.watching) return;
+    const next = watchState.tier === "winner" ? "mediocre" : "winner";
+    try {
+      const d = await api("/watchlist/tier", { symbol: currentSymbol, tier: next });
+      if (d.error) { addMsg(`⚠️ ${d.error}`, "bot"); return; }
+      paintWatch({ ...watchState, tier: d.tier });
+      addMsg(`🎯 ${d.action}${d.note ? " — " + d.note : ""}. ` +
+        (d.tier === "winner"
+          ? "Once up +2.5%, its stop moves to breakeven (0%) — room to run to +5%."
+          : "Once up +2.5%, its stop locks +1% profit."), "bot");
     } catch (e) { addMsg("Server unreachable.", "bot"); }
   };
 
