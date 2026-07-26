@@ -142,6 +142,20 @@ def _peak_gain_since(symbol: str, entry_price: Optional[float], entry_dt) -> Opt
         return None
 
 
+def _floor_status(peak: Optional[float], arm: float, floor: float) -> str:
+    """Human note for a held position's breakeven/profit-lock stop state, so the
+    scan log shows whether the +arm trigger has been reached and where the stop is."""
+    if not arm:
+        return ""
+    if peak is None:
+        return " · breakeven: peak-since-entry unknown"
+    if peak >= arm:
+        where = "entry / 0%" if floor <= 0 else f"+{floor * 100:.0f}%"
+        lock = "breakeven" if floor <= 0 else "profit-lock"
+        return f" · 🔒 {lock} ARMED (peaked +{peak * 100:.1f}%, stop moved to {where})"
+    return f" · peak so far +{peak * 100:.1f}% (breakeven arms at +{arm * 100:.1f}%)"
+
+
 # ---------------- GitHub AUTO_TRADING variable (the ON/OFF switch) ----------
 
 def _gh_repo() -> Optional[str]:
@@ -334,7 +348,8 @@ def run_scan(dry_run: bool = False) -> dict:
                     say(f"    -> position CLOSED ({reason}, {tier}, pnl {pnl_frac * 100:+.1f}%)")
             else:
                 held_txt = f"day {held_days}/{MAX_HOLD_DAYS}" if held_days is not None else "entry date unknown"
-                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, {held_txt})")
+                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, {held_txt})"
+                    + _floor_status(peak, BREAKEVEN_ARM, floor))
         elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
@@ -429,7 +444,8 @@ def run_virtual_scan(dry_run: bool = False) -> dict:
                         actions.append(trade)
                         say(f"    -> SOLD {trade['qty']} @ ₹{price} ({reason}, {tier}, pnl ₹{trade['pnl']:,.0f})")
             else:
-                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, day {held_days}/{MAX_HOLD_DAYS})")
+                say(f"    -> holding [{tier}] (pnl {pnl_frac * 100:+.1f}%, day {held_days}/{MAX_HOLD_DAYS})"
+                    + _floor_status(peak, BREAKEVEN_ARM, floor))
         elif flag == "BUY":
             if conf < MIN_CONF:
                 say(f"    -> skip buy (confidence {conf:.2f} < {MIN_CONF})")
