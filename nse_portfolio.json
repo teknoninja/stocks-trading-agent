@@ -1,18 +1,8 @@
 {
   "currency": "INR",
   "starting_cash": 20000.0,
-  "cash": 14326.9,
+  "cash": 18135.0,
   "positions": {
-    "ICICIBANK.NS": {
-      "qty": 1,
-      "avg_price": 1444.3,
-      "opened_at": "2026-07-22T05:44:24.229407+00:00"
-    },
-    "TCS.NS": {
-      "qty": 1,
-      "avg_price": 2398.0,
-      "opened_at": "2026-07-28T16:11:57.492374+00:00"
-    },
     "BHARTIARTL.NS": {
       "qty": 1,
       "avg_price": 1956.6,
@@ -96,6 +86,26 @@
       "side": "buy",
       "qty": 1,
       "price": 1956.6
+    },
+    {
+      "ts": "2026-07-31T06:07:09.788403+00:00",
+      "symbol": "TCS.NS",
+      "side": "sell",
+      "qty": 1,
+      "price": 2372.7,
+      "pnl": -25.3,
+      "reason": "breakeven",
+      "tier": "winner"
+    },
+    {
+      "ts": "2026-07-31T06:07:16.901133+00:00",
+      "symbol": "ICICIBANK.NS",
+      "side": "sell",
+      "qty": 1,
+      "price": 1435.4,
+      "pnl": -8.9,
+      "reason": "time_exit",
+      "tier": "winner"
     }
   ],
   "equity_history": [
@@ -174,8 +184,12 @@
     {
       "ts": "2026-07-30T08:16:02.445908+00:00",
       "equity": 20162.5
+    },
+    {
+      "ts": "2026-07-31T06:07:30.218416+00:00",
+      "equity": 20096.1
     }
   ],
   "created_at": "2026-07-18T14:24:38.308209+00:00",
-  "updated_at": "2026-07-30T08:16:02.445941+00:00"
+  "updated_at": "2026-07-31T06:07:30.218443+00:00"
 }
