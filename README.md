@@ -2,6 +2,8 @@
 
 AI-powered institutional-grade stock analysis with SEC filings, social sentiment, and comprehensive market data. Built with OpenAI Agents SDK (gpt-5.4-mini).
 
+https://github.com/user-attachments/assets/c1bbd4e1-9792-4940-a3ac-b5c86f9c13e4
+
 ## 🆕 TradingView Sidebar Bot (100% free tier)
 
 Open TradingView with an embedded AI analyst that follows whatever stock you navigate to, computes a **BUY / SELL / HOLD flag**, and answers questions about it — powered by free Yahoo Finance data + the **Google Gemini free tier** (with a rule-based fallback if no API key is set).
@@ -109,7 +111,7 @@ Reports hit-rate per flag vs the buy&hold baseline **and per-strategy edge** (wa
 
 
 
-https://github.com/user-attachments/assets/c1bbd4e1-9792-4940-a3ac-b5c86f9c13e4
+
 
 
 ```
