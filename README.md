@@ -1,6 +1,6 @@
 # 📈 Stock Analysis Agents
 
-AI-powered institutional-grade stock analysis with SEC filings, social sentiment, and comprehensive market data. Built with OpenAI Agents SDK (gpt-5.4-mini).
+AI-powered institutional-grade stock analysis with SEC filings, social sentiment, and comprehensive market data. Built with OpenAI Agents SDK (gpt-5.4-mini) with an embedded AI analyst (Gemini free tier) .
 
 https://github.com/user-attachments/assets/c1bbd4e1-9792-4940-a3ac-b5c86f9c13e4
 
