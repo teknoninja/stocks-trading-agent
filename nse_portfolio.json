@@ -1,13 +1,8 @@
 {
   "currency": "INR",
   "starting_cash": 20000.0,
-  "cash": 17321.7,
+  "cash": 18736.4,
   "positions": {
-    "ICICIBANK.NS": {
-      "qty": 1,
-      "avg_price": 1445.5,
-      "opened_at": "2026-08-04T05:43:11.110749+00:00"
-    },
     "RELIANCE.NS": {
       "qty": 1,
       "avg_price": 1323.1,
@@ -135,6 +130,16 @@
       "side": "buy",
       "qty": 1,
       "price": 1323.1
+    },
+    {
+      "ts": "2026-08-13T04:47:31.455706+00:00",
+      "symbol": "ICICIBANK.NS",
+      "side": "sell",
+      "qty": 1,
+      "price": 1414.7,
+      "pnl": -30.8,
+      "reason": "time_exit",
+      "tier": "winner"
     }
   ],
   "equity_history": [
@@ -321,8 +326,12 @@
     {
       "ts": "2026-08-12T09:15:47.607756+00:00",
       "equity": 20062.7
+    },
+    {
+      "ts": "2026-08-13T04:47:45.433273+00:00",
+      "equity": 20049.6
     }
   ],
   "created_at": "2026-07-18T14:24:38.308209+00:00",
-  "updated_at": "2026-08-12T09:15:47.607788+00:00"
+  "updated_at": "2026-08-13T04:47:45.433307+00:00"
 }
