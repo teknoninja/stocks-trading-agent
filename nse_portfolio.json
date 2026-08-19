@@ -1,13 +1,8 @@
 {
   "currency": "INR",
   "starting_cash": 20000.0,
-  "cash": 12688.0,
+  "cash": 14002.2,
   "positions": {
-    "RELIANCE.NS": {
-      "qty": 1,
-      "avg_price": 1323.1,
-      "opened_at": "2026-08-10T04:25:26.226651+00:00"
-    },
     "BHARTIARTL.NS": {
       "qty": 1,
       "avg_price": 1988.4,
@@ -164,6 +159,16 @@
       "side": "buy",
       "qty": 1,
       "price": 4060.0
+    },
+    {
+      "ts": "2026-08-19T04:31:25.932840+00:00",
+      "symbol": "RELIANCE.NS",
+      "side": "sell",
+      "qty": 1,
+      "price": 1314.2,
+      "pnl": -8.9,
+      "reason": "time_exit",
+      "tier": "winner"
     }
   ],
   "equity_history": [
@@ -438,8 +443,12 @@
     {
       "ts": "2026-08-18T09:58:01.470966+00:00",
       "equity": 20017.6
+    },
+    {
+      "ts": "2026-08-19T04:31:48.719606+00:00",
+      "equity": 19986.9
     }
   ],
   "created_at": "2026-07-18T14:24:38.308209+00:00",
-  "updated_at": "2026-08-18T09:58:01.470995+00:00"
+  "updated_at": "2026-08-19T04:31:48.719640+00:00"
 }
